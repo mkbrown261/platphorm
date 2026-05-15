@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "composite": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "target": "ESNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "jsx": "react-jsx",
+    "lib": ["ESNext", "DOM", "DOM.Iterable"],
+    "baseUrl": ".",
+    "paths": {
+      "@renderer/*": ["./src/*"],
+      "@core/*": ["./src/core/*"],
+      "@store/*": ["./src/store/*"],
+      "@components/*": ["./src/components/*"]
+    }
+  },
+  "include": [
+    "src/**/*"
+  ]
+}
