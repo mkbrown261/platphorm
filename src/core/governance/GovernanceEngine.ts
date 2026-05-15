@@ -1,8 +1,22 @@
 import type { AuditLog, DNAViolation, GovernanceEvent, GovernanceEventType, GovernanceReport, ProjectDNA } from '../../types'
 
+// Forward declarations — set by wiring in App.tsx to avoid circular deps
+type StoreAppender = (entry: AuditLog) => void
+type StoreEventLogger = (event: GovernanceEvent) => void
+let _storeAppender: StoreAppender | null = null
+let _storeEventLogger: StoreEventLogger | null = null
+
+export function wireGovernanceStore(appender: StoreAppender, eventLogger: StoreEventLogger) {
+  _storeAppender = appender
+  _storeEventLogger = eventLogger
+}
+
 class GovernanceEngine {
   private auditLog: AuditLog[] = []
   private governanceEvents: GovernanceEvent[] = []
+  private projectPath: string | null = null
+
+  setProjectPath(path: string) { this.projectPath = path }
 
   checkLockedSystem(systemName: string, dna: ProjectDNA): boolean {
     const locked = dna.lockedSystems.find(
@@ -69,20 +83,31 @@ class GovernanceEngine {
   }
 
   logGovernanceEvent(event: Omit<GovernanceEvent, 'id' | 'timestamp'>): void {
-    this.governanceEvents.push({
+    const full: GovernanceEvent = {
       ...event,
       id: `event-${Date.now()}-${Math.random()}`,
       timestamp: Date.now()
-    })
+    }
+    this.governanceEvents.push(full)
+    // Wire to store
+    _storeEventLogger?.(full)
   }
 
   appendAuditLog(entry: Omit<AuditLog, 'id' | 'timestamp' | 'immutable'>): void {
-    this.auditLog.push({
+    const full: AuditLog = {
       ...entry,
       id: `audit-${Date.now()}-${Math.random()}`,
       timestamp: Date.now(),
       immutable: true
-    })
+    }
+    this.auditLog.push(full)
+    // Wire to store
+    _storeAppender?.(full)
+    // Persist to disk if project path set
+    if (this.projectPath) {
+      const line = JSON.stringify(full)
+      window.api.fs.appendAuditLog(this.projectPath, line).catch(() => {})
+    }
   }
 
   generateReport(dna: ProjectDNA): GovernanceReport {

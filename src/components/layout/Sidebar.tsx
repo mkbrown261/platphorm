@@ -3,6 +3,9 @@ import { useProjectStore } from '../../store/projectStore'
 import { useDNAStore } from '../../store/dnaStore'
 import { dnaEngine } from '../../core/dna/DNAEngine'
 import { FolderPicker } from './FolderPicker'
+import { DNAPanel } from '../dna/DNAPanel'
+import { GovernanceDashboard } from '../governance/GovernanceDashboard'
+import { SprintPanel } from '../ai/SprintPanel'
 import type { FileEntry } from '../../types'
 
 const EXT_COLOR: Record<string, string> = {
@@ -88,7 +91,7 @@ function FileNode({ entry, depth = 0 }: { entry: FileEntry; depth?: number }) {
 
 export function Sidebar({ panel }: { panel: string }) {
   const { activeProject, fileTree, setProject, setFileTree } = useProjectStore()
-  const { setDNA, setInitializing, setInitialized, setInitError, dna, isInitializing } = useDNAStore()
+  const { setDNA, setInitializing, setInitialized, setInitError } = useDNAStore()
   const [showPicker, setShowPicker] = useState(false)
 
   const openProject = useCallback(async (path: string) => {
@@ -104,7 +107,13 @@ export function Sidebar({ panel }: { panel: string }) {
 
   const openFolder = useCallback(() => setShowPicker(true), [])
 
-  if (panel === 'dna') return <DNAView dna={dna} loading={isInitializing} />
+  if (panel === 'dna') return <DNAPanel />
+  if (panel === 'governance') return <GovernanceDashboard />
+  if (panel === 'sprint') return (
+    <div style={{ width: 320, flexShrink: 0, background: '#090a11', borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <SprintPanel />
+    </div>
+  )
 
   return (
     <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
@@ -143,34 +152,7 @@ export function Sidebar({ panel }: { panel: string }) {
   )
 }
 
-function DNAView({ dna, loading }: { dna: any; loading: boolean }) {
-  if (loading) return (
-    <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', padding: 16 }}>
-      <div style={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 16, fontWeight: 600 }}>Analyzing DNA</div>
-      {[80,65,90,55,75].map((w, i) => (
-        <div key={i} style={{ height: 8, background: 'rgba(124,58,237,0.15)', borderRadius: 4, marginBottom: 8, width: `${w}%`, opacity: 0.7 }} />
-      ))}
-    </div>
-  )
-  if (!dna) return (
-    <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.2)' }}>Open a project</span>
-    </div>
-  )
-  return (
-    <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', overflowY: 'auto', padding: 12 }}>
-      <div style={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 12, fontWeight: 600 }}>DNA</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: 4 }}>{dna.identity.systemName}</div>
-      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.6, marginBottom: 16 }}>{dna.identity.corePurpose}</div>
-      {dna.systemLaws?.slice(0,6).map((l: any) => (
-        <div key={l.id} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-          <span style={{ fontSize: 10, color: 'rgba(124,58,237,0.6)', fontFamily: 'monospace', flexShrink: 0 }}>{String(l.id).padStart(2,'0')}</span>
-          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.5 }}>{l.rule}</span>
-        </div>
-      ))}
-    </div>
-  )
-}
+
 
 async function buildTree(dir: string, depth = 0): Promise<FileEntry[]> {
   if (depth > 3) return []

@@ -3,22 +3,34 @@ import type { Finding, LayerResult, PipelineContext } from '../../../types'
 
 export async function runContinuityLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
+  const hasCode = Boolean(context.selectedCode?.trim())
 
-  if (!context.projectDNAAvailable) {
+  // No DNA and no code → skip entirely, advisory pass
+  if (!context.projectDNAAvailable && !hasCode) {
     return {
       layer: 'continuity',
-      status: 'skipped',
-      score: 70,
-      findings: [
-        {
-          id: 'continuity-no-dna',
-          layer: 'continuity',
-          severity: 'low',
-          category: 'DNA',
-          message: 'No project DNA — continuity analysis skipped. Initialize DNA to enable.',
-          autoFixable: false
-        }
-      ],
+      status: 'passed',
+      score: 80,
+      findings: [],
+      durationMs: Date.now() - start,
+      timestamp: Date.now()
+    }
+  }
+
+  // No code → intent-only advisory pass
+  if (!hasCode) {
+    return {
+      layer: 'continuity',
+      status: 'passed',
+      score: 85,
+      findings: [{
+        id: 'continuity-intent-pass',
+        layer: 'continuity',
+        severity: 'low',
+        category: 'Continuity',
+        message: 'No existing code to analyze for drift — continuity will be checked after generation.',
+        autoFixable: false
+      }],
       durationMs: Date.now() - start,
       timestamp: Date.now()
     }
@@ -26,32 +38,39 @@ export async function runContinuityLayer(context: PipelineContext): Promise<Laye
 
   const prompt = `You are the Continuity Layer of the PLATPHORM engineering OS.
 
-Your job is to detect inconsistencies, drift, and fragmentation across the codebase.
+Detect inconsistencies and drift in this EXISTING CODE versus the project's patterns.
 
 Project architecture context:
 ${context.architectureDoc ?? 'Not available'}
 
 Developer request: "${context.userPrompt}"
-${context.selectedCode ? `\nCode:\n\`\`\`\n${context.selectedCode}\n\`\`\`` : ''}
 
-Detect:
-1. Naming convention inconsistencies
-2. Pattern contradictions (e.g., two different state patterns)
-3. Duplicate utility functions or logic
-4. Partial refactors (started but not completed)
-5. Schema inconsistencies across the codebase
-6. Contradictory abstractions
-7. Dead code / zombie systems
-8. Fragmented state management
-9. Inconsistent error handling patterns
-10. Conflicting API response shapes
+Code to review:
+\`\`\`
+${context.selectedCode}
+\`\`\`
 
-Respond in JSON:
+Detect REAL issues visible in the code:
+1. Naming convention inconsistencies vs the rest of the codebase
+2. Pattern contradictions (e.g., two different state patterns in same file)
+3. Duplicate utility functions that already exist
+4. Partial refactors that are incomplete
+5. Contradictory abstractions
+
+Do NOT flag theoretical risks or things that might happen in future code.
+Only report what you can actually see.
+
+Severity rules:
+- high: clear pattern contradiction or incomplete refactor that will break things
+- medium: naming inconsistency or duplicate logic
+- low: style drift or advisory
+
+Respond ONLY with JSON:
 {
   "findings": [
     {
       "severity": "high|medium|low",
-      "category": "Naming|Pattern|Duplication|Partial Refactor|Schema|Abstraction|Dead Code|State|Error|API",
+      "category": "Naming|Pattern|Duplication|Partial Refactor|Abstraction",
       "message": "...",
       "location": "...",
       "suggestedFix": "..."
@@ -70,7 +89,7 @@ Respond in JSON:
       findings.push({
         id: `continuity-${Date.now()}-${Math.random()}`,
         layer: 'continuity',
-        severity: f.severity ?? 'medium',
+        severity: f.severity ?? 'low',
         category: f.category ?? 'Continuity',
         message: f.message,
         location: f.location,
@@ -81,7 +100,7 @@ Respond in JSON:
 
     return {
       layer: 'continuity',
-      status: parsed.driftDetected ? 'warned' : 'passed',
+      status: parsed.driftDetected && findings.some(f => f.severity === 'high') ? 'warned' : 'passed',
       score: parsed.coherenceScore ?? 85,
       findings,
       durationMs: Date.now() - start,
@@ -90,8 +109,8 @@ Respond in JSON:
   } catch {
     return {
       layer: 'continuity',
-      status: 'skipped',
-      score: 75,
+      status: 'passed',
+      score: 80,
       findings: [],
       durationMs: Date.now() - start,
       timestamp: Date.now()

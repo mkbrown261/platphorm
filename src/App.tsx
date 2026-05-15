@@ -5,13 +5,39 @@ import { StatusBar } from './components/layout/StatusBar'
 import { EditorArea } from './components/editor/EditorArea'
 import { AIPanel } from './components/ai/AIPanel'
 import { useAIStore } from './store/aiStore'
-import { orchestrator } from './core/providers/AIOrchestrator'
+import { useGovernanceStore } from './store/governanceStore'
+import { useDNAStore } from './store/dnaStore'
+import { orchestrator, setRoleModelOverrides, setIdentityContext } from './core/providers/AIOrchestrator'
+import { wireGovernanceStore } from './core/governance/GovernanceEngine'
 import { SettingsModal } from './components/settings/SettingsModal'
+import { useModelStore } from './store/modelStore'
 
 export default function App() {
   const [panel, setPanel] = useState('files')
   const [showSettings, setShowSettings] = useState(false)
   const { settings, updateSettings, setConfigured } = useAIStore()
+  const { appendAudit, addEvent } = useGovernanceStore()
+  const { roleModels } = useModelStore()
+  const { dna } = useDNAStore()
+
+  // Wire GovernanceEngine → governanceStore (D1)
+  useEffect(() => {
+    wireGovernanceStore(
+      (entry) => appendAudit(entry),
+      (event) => addEvent(event)
+    )
+  }, [])
+
+  // Sync role model overrides into orchestrator on mount and on change
+  useEffect(() => {
+    setRoleModelOverrides(roleModels)
+  }, [roleModels])
+
+  // Sync DNA into UnifiedIdentity context whenever it changes
+  // This makes EVERY AI call architecturally aware without any manual prompting
+  useEffect(() => {
+    setIdentityContext({ dna })
+  }, [dna])
 
   useEffect(() => {
     const key = import.meta.env.VITE_OPENROUTER_API_KEY
