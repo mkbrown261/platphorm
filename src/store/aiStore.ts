@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import type { AppSettings, LayerResult, PipelineResult } from '../types'
 
 interface AIState {
@@ -29,32 +30,44 @@ const DEFAULT_SETTINGS: AppSettings = {
   governanceStrictMode: false
 }
 
-export const useAIStore = create<AIState>((set) => ({
-  settings: DEFAULT_SETTINGS,
-  isConfigured: false,
-  pipelineHistory: [],
-  activePipeline: null,
-  pipelineRunning: false,
-  layerProgress: null,
-
-  updateSettings: (s) =>
-    set((state) => ({ settings: { ...state.settings, ...s } })),
-
-  setConfigured: (v) => set({ isConfigured: v }),
-
-  startPipeline: () => set({ pipelineRunning: true, layerProgress: null }),
-
-  updateLayerProgress: (index, name, result) =>
-    set({ layerProgress: { index, name, result } }),
-
-  completePipeline: (result) =>
-    set((s) => ({
+export const useAIStore = create<AIState>()(
+  persist(
+    (set) => ({
+      settings: DEFAULT_SETTINGS,
+      isConfigured: false,
+      pipelineHistory: [],
+      activePipeline: null,
       pipelineRunning: false,
-      activePipeline: result,
       layerProgress: null,
-      pipelineHistory: [...s.pipelineHistory.slice(-50), result]
-    })),
 
-  clearPipeline: () =>
-    set({ activePipeline: null, pipelineRunning: false, layerProgress: null })
-}))
+      updateSettings: (s) =>
+        set((state) => ({ settings: { ...state.settings, ...s } })),
+
+      setConfigured: (v) => set({ isConfigured: v }),
+
+      startPipeline: () => set({ pipelineRunning: true, layerProgress: null }),
+
+      updateLayerProgress: (index, name, result) =>
+        set({ layerProgress: { index, name, result } }),
+
+      completePipeline: (result) =>
+        set((s) => ({
+          pipelineRunning: false,
+          activePipeline: result,
+          layerProgress: null,
+          pipelineHistory: [...s.pipelineHistory.slice(-50), result]
+        })),
+
+      clearPipeline: () =>
+        set({ activePipeline: null, pipelineRunning: false, layerProgress: null })
+    }),
+    {
+      name: 'platphorm-ai-settings',
+      // Only persist settings and isConfigured — not pipeline history or runtime state
+      partialize: (state) => ({
+        settings: state.settings,
+        isConfigured: state.isConfigured,
+      }),
+    }
+  )
+)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAIStore } from '../../store/aiStore'
-import { useModelStore, DEFAULT_ROLE_MODELS, ROLE_DESCRIPTIONS } from '../../store/modelStore'
+import { useModelStore, DEFAULT_ROLE_MODELS, ROLE_DESCRIPTIONS, FEATURED_MODELS } from '../../store/modelStore'
 import { orchestrator, setRoleModelOverrides } from '../../core/providers/AIOrchestrator'
 import type { ModelRole } from '../../types'
 
@@ -82,7 +82,7 @@ export function SettingsModal({ onClose }: Props) {
     }
   }, [tab])
 
-  const save = () => {
+  const save = async () => {
     Object.entries(keys).forEach(([provider, key]) => {
       if (key.trim()) orchestrator.addProvider({ provider: provider as any, apiKey: key.trim() })
     })
@@ -92,6 +92,10 @@ export function SettingsModal({ onClose }: Props) {
     // Push role overrides into orchestrator
     setRoleModelOverrides(roleModels)
     setSaved(true)
+    // Auto-fetch live model catalog when a key is saved
+    if (keys.openrouter.trim()) {
+      fetchModels()
+    }
     setTimeout(() => { setSaved(false); onClose() }, 800)
   }
 
@@ -170,12 +174,12 @@ export function SettingsModal({ onClose }: Props) {
                   <input
                     value={modelSearch}
                     onChange={e => setModelSearch(e.target.value)}
-                    placeholder="Search models..."
+                    placeholder="Search models (claude, gpt, gemini, deepseek...)"
                     style={{ flex: 1, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: '7px 12px', fontSize: 12, color: 'rgba(255,255,255,0.7)', outline: 'none', fontFamily: 'monospace' }}
                   />
                   <button onClick={fetchModels} disabled={isLoadingModels}
-                    style={{ padding: '7px 14px', background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', borderRadius: 8, cursor: 'pointer', fontSize: 11, color: '#a78bfa', transition: 'all 0.15s' }}>
-                    {isLoadingModels ? 'Loading...' : lastFetchedAt ? 'Refresh' : 'Load Models'}
+                    style={{ padding: '7px 14px', background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', borderRadius: 8, cursor: isLoadingModels ? 'wait' : 'pointer', fontSize: 11, color: '#a78bfa', transition: 'all 0.15s', whiteSpace: 'nowrap' }}>
+                    {isLoadingModels ? '⟳ Loading...' : lastFetchedAt ? '↻ Refresh' : '↓ Load All'}
                   </button>
                 </div>
                 {modelsError && (
@@ -183,16 +187,22 @@ export function SettingsModal({ onClose }: Props) {
                     {modelsError}
                   </div>
                 )}
-                {lastFetchedAt && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                   <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)', fontFamily: 'monospace' }}>
-                    {availableModels.length} models · last fetched {new Date(lastFetchedAt).toLocaleTimeString()}
+                    {lastFetchedAt
+                      ? `${availableModels.length} models · refreshed ${new Date(lastFetchedAt).toLocaleTimeString()}`
+                      : `${availableModels.length} featured models · click "Load All" for full catalog`}
                   </div>
-                )}
+                  {isLoadingModels && (
+                    <div style={{ width: 10, height: 10, border: '1.5px solid rgba(167,139,250,0.3)', borderTopColor: '#a78bfa', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                  )}
+                </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 320, overflowY: 'auto' }}>
                   {filteredModels.map(m => {
                     const isSelected = settings.preferredModel === m.id
+                    const isFeatured = FEATURED_MODELS.some(f => f.id === m.id)
                     const inputCost = parseFloat(m.pricing?.prompt ?? '0') * 1e6
-                    const outputCost = parseFloat(m.pricing?.completion ?? '0') * 1e6
+                    const ctxK = m.context_length >= 1000 ? `${(m.context_length / 1000).toFixed(0)}k` : String(m.context_length)
                     return (
                       <button key={m.id} onClick={() => updateSettings({ preferredModel: m.id })}
                         style={{
@@ -201,27 +211,30 @@ export function SettingsModal({ onClose }: Props) {
                           cursor: 'pointer', transition: 'all 0.1s',
                           outline: isSelected ? '1px solid rgba(124,58,237,0.35)' : 'none'
                         }}
-                        onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.04)' }}
+                        onMouseEnter={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.05)' }}
                         onMouseLeave={e => { if (!isSelected) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.02)' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                             {isSelected && <span style={{ color: '#22c55e', fontSize: 10 }}>●</span>}
-                            <span style={{ fontSize: 12, fontFamily: 'monospace', color: isSelected ? '#c4b5fd' : 'rgba(255,255,255,0.65)' }}>{m.id}</span>
+                            <span style={{ fontSize: 11, fontFamily: 'monospace', color: isSelected ? '#c4b5fd' : 'rgba(255,255,255,0.75)' }}>{m.id}</span>
+                            {isFeatured && !lastFetchedAt && (
+                              <span style={{ fontSize: 9, color: '#a78bfa', background: 'rgba(124,58,237,0.12)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: 4, padding: '1px 5px' }}>★</span>
+                            )}
                           </div>
-                          <div style={{ display: 'flex', gap: 8, fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.2)' }}>
-                            {m.context_length && <span>{(m.context_length / 1000).toFixed(0)}k ctx</span>}
-                            {inputCost > 0 && <span>${inputCost.toFixed(2)}/M in</span>}
+                          <div style={{ display: 'flex', gap: 8, fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.25)' }}>
+                            {m.context_length && <span>{ctxK} ctx</span>}
+                            {inputCost > 0 && <span>${inputCost.toFixed(2)}/M</span>}
                           </div>
                         </div>
                         {m.name && m.name !== m.id && (
-                          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', marginTop: 2, marginLeft: isSelected ? 16 : 0 }}>{m.name}</div>
+                          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginTop: 2, marginLeft: isSelected ? 14 : 0 }}>{m.name}</div>
                         )}
                       </button>
                     )
                   })}
                   {filteredModels.length === 0 && !isLoadingModels && (
                     <div style={{ padding: 24, textAlign: 'center', fontSize: 12, color: 'rgba(255,255,255,0.2)' }}>
-                      {availableModels.length === 0 ? 'Click "Load Models" to fetch the catalog' : 'No models match your search'}
+                      No models match your search
                     </div>
                   )}
                 </div>

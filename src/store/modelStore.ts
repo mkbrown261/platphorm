@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 import type { ModelRole } from '../types'
 
 export interface OpenRouterModel {
@@ -10,16 +11,17 @@ export interface OpenRouterModel {
   top_provider?: { context_length?: number }
 }
 
-// Default role → model assignments — matches AIOrchestrator ROLE_MODEL_MAP
+// Current best models on OpenRouter as of 2026-05
+// These are the actual OpenRouter model IDs — keep in sync with their catalog
 export const DEFAULT_ROLE_MODELS: Record<ModelRole, string> = {
-  architect:    'anthropic/claude-opus-4',
-  security:     'anthropic/claude-opus-4',
+  architect:    'anthropic/claude-opus-4-5',
+  security:     'anthropic/claude-opus-4-5',
   backend:      'anthropic/claude-sonnet-4-5',
   frontend:     'anthropic/claude-sonnet-4-5',
   refactor:     'anthropic/claude-sonnet-4-5',
   performance:  'google/gemini-2.5-pro',
   general:      'anthropic/claude-sonnet-4-5',
-  validation:   'deepseek/deepseek-r1',
+  validation:   'deepseek/deepseek-r1-0528',
   continuity:   'google/gemini-2.5-pro'
 }
 
@@ -35,17 +37,43 @@ export const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
   continuity:   'Coherence checks, cross-session memory, drift detection'
 }
 
+// Hand-curated list of the best current models — shown before the live catalog loads
+// These cover the most important providers so users can immediately pick a model
+export const FEATURED_MODELS: OpenRouterModel[] = [
+  // Anthropic Claude
+  { id: 'anthropic/claude-opus-4-5',   name: 'Claude Opus 4.5',   context_length: 200000, pricing: { prompt: '0.000015', completion: '0.000075' } },
+  { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', context_length: 200000, pricing: { prompt: '0.000003', completion: '0.000015' } },
+  { id: 'anthropic/claude-haiku-3-5',  name: 'Claude Haiku 3.5',  context_length: 200000, pricing: { prompt: '0.0000008', completion: '0.000004' } },
+  // OpenAI
+  { id: 'openai/gpt-4o',               name: 'GPT-4o',            context_length: 128000, pricing: { prompt: '0.0000025', completion: '0.00001' } },
+  { id: 'openai/gpt-4o-mini',          name: 'GPT-4o mini',       context_length: 128000, pricing: { prompt: '0.00000015', completion: '0.0000006' } },
+  { id: 'openai/o3',                   name: 'OpenAI o3',         context_length: 200000, pricing: { prompt: '0.00001', completion: '0.00004' } },
+  { id: 'openai/o4-mini',              name: 'OpenAI o4-mini',    context_length: 200000, pricing: { prompt: '0.0000011', completion: '0.0000044' } },
+  // Google Gemini
+  { id: 'google/gemini-2.5-pro',       name: 'Gemini 2.5 Pro',    context_length: 1000000, pricing: { prompt: '0.00000125', completion: '0.00001' } },
+  { id: 'google/gemini-2.5-flash',     name: 'Gemini 2.5 Flash',  context_length: 1000000, pricing: { prompt: '0.000000075', completion: '0.0000003' } },
+  // DeepSeek
+  { id: 'deepseek/deepseek-r1-0528',   name: 'DeepSeek R1 0528',  context_length: 160000, pricing: { prompt: '0.0000005', completion: '0.00000215' } },
+  { id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3',    context_length: 160000, pricing: { prompt: '0.00000027', completion: '0.0000011' } },
+  // Meta Llama
+  { id: 'meta-llama/llama-4-maverick', name: 'Llama 4 Maverick',  context_length: 524288, pricing: { prompt: '0.0000002', completion: '0.0000006' } },
+  { id: 'meta-llama/llama-4-scout',    name: 'Llama 4 Scout',     context_length: 524288, pricing: { prompt: '0.00000008', completion: '0.00000024' } },
+  // Mistral
+  { id: 'mistralai/mistral-large',     name: 'Mistral Large',     context_length: 128000, pricing: { prompt: '0.000002', completion: '0.000006' } },
+  { id: 'mistralai/codestral-2501',    name: 'Codestral 2501',    context_length: 256000, pricing: { prompt: '0.000001', completion: '0.000003' } },
+]
+
 interface ModelState {
-  // Fetched model catalog
+  // Fetched model catalog from OpenRouter API
   availableModels: OpenRouterModel[]
   isLoadingModels: boolean
   modelsError: string | null
   lastFetchedAt: number | null
 
-  // Role → model assignments (overrides AIOrchestrator defaults)
+  // Role → model assignments (persisted)
   roleModels: Record<ModelRole, string>
 
-  // Per-session model override (user picks for this conversation)
+  // Per-session overrides (not persisted — reset on launch)
   sessionModel: string | null
   sessionRole: ModelRole | null
 
@@ -60,32 +88,45 @@ interface ModelState {
   resetRoleModels: () => void
 }
 
-export const useModelStore = create<ModelState>((set) => ({
-  availableModels: [],
-  isLoadingModels: false,
-  modelsError: null,
-  lastFetchedAt: null,
+export const useModelStore = create<ModelState>()(
+  persist(
+    (set) => ({
+      availableModels: FEATURED_MODELS,  // start with curated list, live fetch replaces it
+      isLoadingModels: false,
+      modelsError: null,
+      lastFetchedAt: null,
 
-  roleModels: { ...DEFAULT_ROLE_MODELS },
+      roleModels: { ...DEFAULT_ROLE_MODELS },
 
-  sessionModel: null,
-  sessionRole: null,
+      sessionModel: null,
+      sessionRole: null,
 
-  setAvailableModels: (models) =>
-    set({ availableModels: models, lastFetchedAt: Date.now(), modelsError: null }),
+      setAvailableModels: (models) =>
+        set({ availableModels: models, lastFetchedAt: Date.now(), modelsError: null }),
 
-  setLoadingModels: (v) => set({ isLoadingModels: v }),
+      setLoadingModels: (v) => set({ isLoadingModels: v }),
 
-  setModelsError: (e) => set({ modelsError: e, isLoadingModels: false }),
+      setModelsError: (e) => set({ modelsError: e, isLoadingModels: false }),
 
-  setRoleModel: (role, modelId) =>
-    set(s => ({ roleModels: { ...s.roleModels, [role]: modelId } })),
+      setRoleModel: (role, modelId) =>
+        set(s => ({ roleModels: { ...s.roleModels, [role]: modelId } })),
 
-  setRoleModels: (map) => set({ roleModels: map }),
+      setRoleModels: (map) => set({ roleModels: map }),
 
-  setSessionModel: (model) => set({ sessionModel: model }),
+      setSessionModel: (model) => set({ sessionModel: model }),
 
-  setSessionRole: (role) => set({ sessionRole: role }),
+      setSessionRole: (role) => set({ sessionRole: role }),
 
-  resetRoleModels: () => set({ roleModels: { ...DEFAULT_ROLE_MODELS } })
-}))
+      resetRoleModels: () => set({ roleModels: { ...DEFAULT_ROLE_MODELS } })
+    }),
+    {
+      name: 'platphorm-models',
+      // Persist role assignments and cached model list, but not loading/error state
+      partialize: (state) => ({
+        availableModels: state.availableModels,
+        lastFetchedAt: state.lastFetchedAt,
+        roleModels: state.roleModels,
+      }),
+    }
+  )
+)
