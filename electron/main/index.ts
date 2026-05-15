@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import * as fs from 'fs'
 import * as path from 'path'
+import * as os from 'os'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -96,5 +97,18 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:exists', async (_event, filePath: string) => {
     return fs.existsSync(filePath)
+  })
+
+  ipcMain.handle('fs:mkdir', async (_event, dirPath: string) => {
+    try {
+      fs.mkdirSync(dirPath, { recursive: true })
+      return { success: true }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
+  })
+
+  ipcMain.handle('fs:getHome', async () => {
+    return os.homedir()
   })
 }

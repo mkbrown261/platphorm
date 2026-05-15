@@ -12,7 +12,10 @@ const api = {
       dirPath: string
     ): Promise<Array<{ name: string; isDirectory: boolean; path: string }>> =>
       ipcRenderer.invoke('fs:readDir', dirPath),
-    exists: (filePath: string): Promise<boolean> => ipcRenderer.invoke('fs:exists', filePath)
+    exists: (filePath: string): Promise<boolean> => ipcRenderer.invoke('fs:exists', filePath),
+    mkdir: (dirPath: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('fs:mkdir', dirPath),
+    getHome: (): Promise<string> => ipcRenderer.invoke('fs:getHome')
   }
 }
 

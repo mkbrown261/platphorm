@@ -24,6 +24,8 @@ interface Window {
         dirPath: string
       ) => Promise<Array<{ name: string; isDirectory: boolean; path: string }>>
       exists: (filePath: string) => Promise<boolean>
+      mkdir: (dirPath: string) => Promise<{ success: boolean; error?: string }>
+      getHome: () => Promise<string>
     }
   }
   electron: {

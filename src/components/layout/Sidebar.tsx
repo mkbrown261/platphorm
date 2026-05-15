@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react'
 import { useProjectStore } from '../../store/projectStore'
 import { useDNAStore } from '../../store/dnaStore'
 import { dnaEngine } from '../../core/dna/DNAEngine'
+import { FolderPicker } from './FolderPicker'
 import type { FileEntry } from '../../types'
 
 const EXT_COLOR: Record<string, string> = {
@@ -88,10 +89,10 @@ function FileNode({ entry, depth = 0 }: { entry: FileEntry; depth?: number }) {
 export function Sidebar({ panel }: { panel: string }) {
   const { activeProject, fileTree, setProject, setFileTree } = useProjectStore()
   const { setDNA, setInitializing, setInitialized, setInitError, dna, isInitializing } = useDNAStore()
+  const [showPicker, setShowPicker] = useState(false)
 
-  const openFolder = useCallback(async () => {
-    const path = await window.api.fs.openFolder()
-    if (!path) return
+  const openProject = useCallback(async (path: string) => {
+    setShowPicker(false)
     setProject({ id: `p-${Date.now()}`, name: path.split('/').pop() ?? 'Project', rootPath: path, createdAt: Date.now(), lastOpenedAt: Date.now(), hasDNA: false })
     const tree = await buildTree(path)
     setFileTree(tree)
@@ -101,10 +102,13 @@ export function Sidebar({ panel }: { panel: string }) {
     finally { setInitializing(false) }
   }, [setProject, setFileTree, setDNA, setInitializing, setInitialized, setInitError])
 
+  const openFolder = useCallback(() => setShowPicker(true), [])
+
   if (panel === 'dna') return <DNAView dna={dna} loading={isInitializing} />
 
   return (
     <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      {showPicker && <FolderPicker onSelect={openProject} onCancel={() => setShowPicker(false)} />}
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
         <span style={{ fontSize: 10, fontWeight: 600, color: 'rgba(255,255,255,0.25)', textTransform: 'uppercase', letterSpacing: 2 }}>
