@@ -1,51 +1,48 @@
 import { useProjectStore } from '../../store/projectStore'
 import { useDNAStore } from '../../store/dnaStore'
 import { useAIStore } from '../../store/aiStore'
-import { useGovernanceStore } from '../../store/governanceStore'
 
 export function StatusBar() {
   const { openTabs, activeTabId } = useProjectStore()
   const { dna, isInitializing } = useDNAStore()
-  const { settings, isConfigured, activePipeline } = useAIStore()
-  const { report } = useGovernanceStore()
+  const { isConfigured, settings, activePipeline, pipelineRunning } = useAIStore()
 
-  const activeTab = openTabs.find((t) => t.id === activeTabId)
-
-  const healthColor =
-    report?.overallHealth === 'healthy'
-      ? 'text-emerald-500'
-      : report?.overallHealth === 'degraded'
-        ? 'text-amber-500'
-        : 'text-red-500'
+  const activeTab = openTabs.find(t => t.id === activeTabId)
 
   return (
-    <div className="flex items-center justify-between px-4 h-6 bg-[#06060e] border-t border-[#1a1a2e] text-[10px] font-mono">
-      <div className="flex items-center gap-4 text-slate-600">
-        {isInitializing && <span className="text-violet-400 animate-pulse">Analyzing DNA...</span>}
+    <div className="flex items-center justify-between h-6 px-3 bg-base-950 border-t border-base-500/30 text-[10px] font-mono flex-shrink-0 select-none">
+      {/* Left */}
+      <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1.5">
+          <div className="w-1.5 h-1.5 rounded-full bg-violet-500" />
+          <span className="text-violet-400 font-semibold tracking-wider">PLATPHORM</span>
+        </div>
+        {isInitializing && <span className="text-violet-400 animate-pulse">Analyzing project...</span>}
         {dna && !isInitializing && (
-          <span className={healthColor}>
-            {report?.overallHealth?.toUpperCase() ?? 'HEALTHY'}
-          </span>
+          <span className="text-slate-600">{dna.identity.systemName}</span>
         )}
-        {activePipeline && (
-          <span className={activePipeline.approved ? 'text-emerald-500' : 'text-red-500'}>
-            SCORE {activePipeline.overallScore}/100
-          </span>
+        {pipelineRunning && (
+          <span className="text-violet-400 animate-pulse">Running governance pipeline...</span>
         )}
-        {report && report.activeViolations > 0 && (
-          <span className="text-amber-500">{report.activeViolations} VIOLATIONS</span>
+        {activePipeline && !pipelineRunning && (
+          <span className={activePipeline.approved ? 'text-emerald-500' : 'text-red-400'}>
+            {activePipeline.approved ? '✓' : '✗'} {activePipeline.overallScore}/100
+          </span>
         )}
       </div>
 
+      {/* Right */}
       <div className="flex items-center gap-4 text-slate-600">
         {activeTab && (
           <>
             <span>{activeTab.language}</span>
-            <span>{activeTab.filePath.split('/').slice(-2).join('/')}</span>
+            <span className="text-slate-700">
+              {activeTab.filePath.split('/').slice(-2).join('/')}
+            </span>
           </>
         )}
-        <span className={isConfigured ? 'text-violet-400' : 'text-slate-700'}>
-          {isConfigured ? settings.preferredProvider.toUpperCase() : 'NO PROVIDER'}
+        <span className={isConfigured ? 'text-violet-400/70' : 'text-slate-700'}>
+          {isConfigured ? settings.preferredProvider : 'no provider'}
         </span>
       </div>
     </div>

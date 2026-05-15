@@ -2,43 +2,49 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@300;400;500&display=swap');
 
-* {
+*, *::before, *::after {
   box-sizing: border-box;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
 }
 
-html,
-body,
-#root {
+html, body, #root {
   height: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background: #080810;
+  background: #0d0d14;
   color: #e2e8f0;
-  font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Custom scrollbar */
-::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
-::-webkit-scrollbar-track {
-  background: transparent;
-}
-::-webkit-scrollbar-thumb {
-  background: #1a1a2e;
-  border-radius: 2px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background: #9f7aea33;
-}
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e1e2e; border-radius: 99px; }
+::-webkit-scrollbar-thumb:hover { background: #7c3aed44; }
 
-/* Monaco editor override */
-.monaco-editor .margin {
-  background: #080810 !important;
+::selection { background: #7c3aed33; }
+
+.monaco-editor .margin,
+.monaco-editor-background { background: #0b0b12 !important; }
+
+/* Smooth fade for panels */
+.panel-enter { animation: fadeIn 120ms ease; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+
+/* Pipeline pulse */
+@keyframes layerPulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
+.layer-active { animation: layerPulse 1s ease-in-out infinite; }
+
+/* Typing cursor */
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+.cursor-blink { animation: blink 1s step-end infinite; }
+
+/* Code block */
+pre { font-family: 'JetBrains Mono', 'Fira Code', monospace !important; }
+code { font-family: 'JetBrains Mono', 'Fira Code', monospace !important; }
