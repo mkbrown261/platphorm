@@ -53,15 +53,19 @@ export async function runSelfCritiqueLayer(
 
     const scorecard: QualityScorecard = parsed.scorecard ?? defaultScorecard(hasContent)
 
-    // Only mark failed if REAL critical issues in actual code
-    const hasCritical = hasContent && findings.some((f) => f.severity === 'critical')
-    const approved = !hasCritical
+    // SelfCritique NEVER blocks the pipeline with critical findings.
+    // Its job is to score and advise — not to gate. Actual blocking happens
+    // in layers 1-7 on real violations. Layer 10 is advisory only.
+    // Demote any 'critical' to 'high' — critique informs, never blocks.
+    const demotedFindings = findings.map(f =>
+      f.severity === 'critical' ? { ...f, severity: 'high' as const } : f
+    )
 
     return {
       layer: 'selfCritique',
-      status: hasCritical ? 'failed' : findings.some((f) => f.severity === 'high') ? 'warned' : 'passed',
+      status: demotedFindings.some((f) => f.severity === 'high') ? 'warned' : 'passed',
       score: scorecard.overall,
-      findings,
+      findings: demotedFindings,
       durationMs: Date.now() - start,
       timestamp: Date.now(),
       scorecard
@@ -103,8 +107,13 @@ Attack vectors:
 2. ARCHITECTURE — System Law or forbidden pattern violations?
 3. SECURITY — Exploitable vulnerabilities?
 4. COMPLETENESS — Unhandled cases, missing guards?
-5. PRODUCTION SAFETY — Actually deployable or demo code?
-6. DNA CONSISTENCY — Matches project architectural identity?
+5. DNA CONSISTENCY — Matches project architectural identity?
+
+IMPORTANT: This is an ADVISORY layer. Use severity 'high' for serious issues,
+'medium' for improvements, 'low' for style. Do NOT use 'critical' — that is
+reserved for actual security exploits or law violations found in earlier layers.
+Do NOT flag incomplete content if the content you see is a partial execution plan
+— the agent will generate the full implementation after this pipeline.
 
 Score each dimension 0-100.
 

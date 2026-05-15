@@ -213,7 +213,7 @@ export function AIPanel() {
     }))
   }, [])
 
-  const patchTool = useCallback((msgId: string, id: string, status: 'done' | 'error', summary: string) => {
+  const patchTool = useCallback((msgId: string, id: string, status: 'running' | 'done' | 'error', summary: string) => {
     setMsgs(prev => prev.map(m => {
       if (m.id !== msgId || !m.activity) return m
       return { ...m, activity: m.activity.map(a => a.kind === 'tool' && a.id === id ? { ...a, status, summary } : a) }
@@ -422,36 +422,45 @@ export function AIPanel() {
 
     pushActivity(msgId, { kind: 'thinking', text: `Auto-Refactor: ${describeAutoRefactorScope(pipelineResult)}` })
 
+    // Single tool card for the whole refactor run
+    pushActivity(msgId, { kind: 'tool', id: `fix-run`, icon: '⚙', label: 'Auto-Fix', detail: `Regenerating ${pipelineResult.blockers.length} blocker${pipelineResult.blockers.length !== 1 ? 's' : ''}...`, status: 'running' })
+
     const onRefactorProgress = (event: RefactorProgressEvent) => {
       switch (event.type) {
         case 'analyzing':
           pushActivity(msgId, { kind: 'thinking', text: event.message })
           break
         case 'fixing':
-          pushActivity(msgId, { kind: 'tool', id: `fix-${event.findingId}`, icon: '⚙', label: 'Auto-Fix', detail: event.message.slice(0, 60), status: 'running' })
+          // Update the single tool card detail
+          patchTool(msgId, 'fix-run', 'running' as any, event.message.slice(0, 80))
           break
         case 'fix_complete':
-          patchTool(msgId, `fix-${event.findingId}`, event.success ? 'done' : 'error', event.explanation.slice(0, 80))
+          // Handled in 'done'
           break
         case 'done': {
           const r = event.result
-          const summary = `Auto-Refactor complete — ${r.fixedCount}/${r.blockerCount} fixes validated (${r.overallConfidence}% confidence)`
-          pushActivity(msgId, { kind: 'thinking', text: summary })
           if (r.readyToApply && r.fileChanges.length > 0) {
-            const fakeExecPlan: ExecutionPlan = {
+            patchTool(msgId, 'fix-run', 'done', `✓ Generated ${r.fileChanges.length} file${r.fileChanges.length !== 1 ? 's' : ''} · ${r.overallConfidence}% confidence`)
+            const summary = `Auto-Fix complete — ${r.fileChanges.length} file${r.fileChanges.length !== 1 ? 's' : ''} regenerated · ${r.overallConfidence}% confidence · Ready to apply`
+            pushActivity(msgId, { kind: 'thinking', text: summary })
+            const plan: ExecutionPlan = {
               changes: r.fileChanges,
               estimatedRisk: r.overallConfidence >= 80 ? 'low' : r.overallConfidence >= 60 ? 'medium' : 'high',
               reversible: true,
-              rollbackPlan: 'Revert with git checkout before auto-refactor was applied',
+              rollbackPlan: 'Revert with git before auto-fix was applied',
               affectedServices: [],
               requiresApproval: true
             }
-            setPendingPlan({ plan: fakeExecPlan, result: pipelineResult })
+            setPendingPlan({ plan, result: pipelineResult })
+          } else {
+            patchTool(msgId, 'fix-run', 'error', 'Could not generate fixes — try rephrasing your request')
+            pushActivity(msgId, { kind: 'thinking', text: 'Auto-Fix could not produce valid output. Try clicking ⚙ Auto-Fix again, or rephrase your request.' })
           }
           break
         }
         case 'error':
-          pushActivity(msgId, { kind: 'thinking', text: `Auto-Refactor error: ${event.message}` })
+          patchTool(msgId, 'fix-run', 'error', event.message.slice(0, 80))
+          pushActivity(msgId, { kind: 'thinking', text: `Auto-Fix error: ${event.message}` })
           break
       }
     }
@@ -469,7 +478,8 @@ export function AIPanel() {
         immutable: true
       })
     } catch (err) {
-      pushActivity(msgId, { kind: 'thinking', text: `Auto-Refactor failed: ${String(err)}` })
+      patchTool(msgId, 'fix-run', 'error', String(err).slice(0, 80))
+      pushActivity(msgId, { kind: 'thinking', text: `Auto-Fix failed: ${String(err)}` })
     }
 
     setRefactoringMsgId(null)
