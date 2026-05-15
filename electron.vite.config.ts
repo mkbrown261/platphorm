@@ -40,11 +40,6 @@ export default defineConfig({
         '@components': resolve('src/components')
       }
     },
-    plugins: [react()],
-    css: {
-      postcss: {
-        plugins: []
-      }
-    }
+    plugins: [react()]
   }
 })

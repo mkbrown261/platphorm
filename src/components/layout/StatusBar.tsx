@@ -10,39 +10,47 @@ export function StatusBar() {
   const activeTab = openTabs.find(t => t.id === activeTabId)
 
   return (
-    <div className="flex items-center justify-between h-6 px-3 bg-base-950 border-t border-base-500/30 text-[10px] font-mono flex-shrink-0 select-none">
+    <div style={{
+      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      height: 24, padding: '0 12px',
+      background: '#06070d',
+      borderTop: '1px solid rgba(255,255,255,0.06)',
+      flexShrink: 0, userSelect: 'none',
+      fontSize: 10, fontFamily: 'monospace'
+    }}>
       {/* Left */}
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5">
-          <div className="w-1.5 h-1.5 rounded-full bg-violet-500" />
-          <span className="text-violet-400 font-semibold tracking-wider">PLATPHORM</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'linear-gradient(135deg, #a78bfa, #7c3aed)', flexShrink: 0, boxShadow: '0 0 6px rgba(167,139,250,0.8)' }} />
+          <span style={{ color: '#a78bfa', fontWeight: 700, letterSpacing: 2 }}>PLATPHORM</span>
         </div>
-        {isInitializing && <span className="text-violet-400 animate-pulse">Analyzing project...</span>}
+
+        {isInitializing && (
+          <span style={{ color: '#a78bfa', opacity: 0.7 }}>Analyzing project DNA...</span>
+        )}
         {dna && !isInitializing && (
-          <span className="text-slate-600">{dna.identity.systemName}</span>
+          <span style={{ color: 'rgba(255,255,255,0.2)' }}>{dna.identity?.systemName}</span>
         )}
         {pipelineRunning && (
-          <span className="text-violet-400 animate-pulse">Running governance pipeline...</span>
+          <span style={{ color: '#a78bfa', opacity: 0.8 }}>▶ Running pipeline...</span>
         )}
         {activePipeline && !pipelineRunning && (
-          <span className={activePipeline.approved ? 'text-emerald-500' : 'text-red-400'}>
+          <span style={{ color: activePipeline.approved ? '#22c55e' : '#f87171' }}>
             {activePipeline.approved ? '✓' : '✗'} {activePipeline.overallScore}/100
           </span>
         )}
       </div>
 
       {/* Right */}
-      <div className="flex items-center gap-4 text-slate-600">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, color: 'rgba(255,255,255,0.2)' }}>
         {activeTab && (
           <>
-            <span>{activeTab.language}</span>
-            <span className="text-slate-700">
-              {activeTab.filePath.split('/').slice(-2).join('/')}
-            </span>
+            <span style={{ color: 'rgba(255,255,255,0.3)' }}>{activeTab.language}</span>
+            <span>{activeTab.filePath.split('/').slice(-2).join('/')}</span>
           </>
         )}
-        <span className={isConfigured ? 'text-violet-400/70' : 'text-slate-700'}>
-          {isConfigured ? settings.preferredProvider : 'no provider'}
+        <span style={{ color: isConfigured ? 'rgba(167,139,250,0.6)' : 'rgba(255,255,255,0.15)' }}>
+          {isConfigured ? (settings.preferredProvider ?? 'openrouter') : 'no provider'}
         </span>
       </div>
     </div>

@@ -9,11 +9,10 @@ import { orchestrator } from './core/providers/AIOrchestrator'
 import { SettingsModal } from './components/settings/SettingsModal'
 
 export default function App() {
-  const [sidebarPanel, setSidebarPanel] = useState('files')
+  const [panel, setPanel] = useState('files')
   const [showSettings, setShowSettings] = useState(false)
   const { settings, updateSettings, setConfigured } = useAIStore()
 
-  // Auto-configure from env key on launch
   useEffect(() => {
     const key = import.meta.env.VITE_OPENROUTER_API_KEY
     if (key) {
@@ -23,61 +22,41 @@ export default function App() {
     }
   }, [])
 
-  // Global keyboard shortcuts
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
-        e.preventDefault()
-        setShowSettings(v => !v)
-      }
+    const fn = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') { e.preventDefault(); setShowSettings(v => !v) }
     }
-    window.addEventListener('keydown', handler)
-    return () => window.removeEventListener('keydown', handler)
+    window.addEventListener('keydown', fn)
+    return () => window.removeEventListener('keydown', fn)
   }, [])
 
-  const handlePanelChange = (id: string) => {
-    if (id === 'settings') { setShowSettings(true); return }
-    setSidebarPanel(id)
-  }
-
   return (
-    <div className="flex flex-col h-screen bg-base-900 overflow-hidden">
-      {/* Title bar drag region */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#08090f', color: '#e2e8f0', overflow: 'hidden', fontFamily: 'Inter, -apple-system, sans-serif' }}>
+
+      {/* Title bar */}
       <div
-        className="h-8 flex items-center px-4 bg-base-950 border-b border-base-500/30 flex-shrink-0"
-        style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+        style={{ height: 40, display: 'flex', alignItems: 'center', background: '#06070d', borderBottom: '1px solid rgba(255,255,255,0.06)', flexShrink: 0, WebkitAppRegion: 'drag' } as any}
       >
-        {/* macOS traffic lights space + title */}
-        <div className="ml-16 flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          <span className="text-[11px] font-semibold text-slate-500 tracking-widest uppercase">PLATPHORM</span>
+        <div style={{ marginLeft: 80, display: 'flex', alignItems: 'center', gap: 8, WebkitAppRegion: 'no-drag' } as any}>
+          {/* Logo mark */}
+          <div style={{ width: 22, height: 22, borderRadius: 6, background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 12px rgba(124,58,237,0.5)' }}>
+            <span style={{ fontSize: 11, fontWeight: 800, color: 'white', letterSpacing: -0.5 }}>P</span>
+          </div>
+          <span style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.5)', letterSpacing: 3, textTransform: 'uppercase' }}>PLATPHORM</span>
         </div>
       </div>
 
-      {/* Main IDE body */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Activity bar */}
-        <ActivityBar active={sidebarPanel} onChange={handlePanelChange} />
-
-        {/* Sidebar */}
-        <div className="w-56 flex-shrink-0 bg-base-900 border-r border-base-500/25 overflow-hidden">
-          <Sidebar panel={sidebarPanel} />
-        </div>
-
-        {/* Editor */}
-        <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-base-800">
+      {/* Body */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden', minHeight: 0 }}>
+        <ActivityBar active={panel} onChange={(id) => id === 'settings' ? setShowSettings(true) : setPanel(id)} />
+        <Sidebar panel={panel} />
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <EditorArea />
         </div>
-
-        {/* AI Panel */}
-        <div className="w-80 flex-shrink-0 overflow-hidden">
-          <AIPanel />
-        </div>
+        <AIPanel />
       </div>
 
-      {/* Status bar */}
       <StatusBar />
-
-      {/* Settings modal */}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
     </div>
   )

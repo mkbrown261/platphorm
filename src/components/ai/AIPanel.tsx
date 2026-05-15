@@ -6,267 +6,183 @@ import { orchestrator } from '../../core/providers/AIOrchestrator'
 import { runPipeline } from '../../core/intelligence/Pipeline'
 import type { PipelineContext, LayerResult } from '../../types'
 
-type MsgRole = 'user' | 'assistant' | 'system'
-interface Msg {
-  id: string
-  role: MsgRole
-  content: string
-  pipelineScore?: number
-  pipelineApproved?: boolean
-  layers?: LayerResult[]
-}
+type Role = 'user' | 'assistant' | 'system'
+interface Msg { id: string; role: Role; content: string; score?: number; approved?: boolean }
 
-const LAYERS = ['Intent','Architecture','Security','Dependency','Performance','Continuity','Validation','Execution','Observability','Critique']
+const LAYERS = ['Intent','Arch','Security','Deps','Perf','Continuity','Validation','Exec','Observe','Critique']
 
-function PipelineProgress({ current, layers }: { current: number; layers: LayerResult[] }) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <div className="flex gap-1">
-          {LAYERS.map((name, i) => {
-            const done = layers[i]
-            const active = i === current && !done
-            return (
-              <div
-                key={name}
-                title={name}
-                className={`h-1 w-4 rounded-full transition-all duration-300 ${
-                  done
-                    ? done.status === 'passed' ? 'bg-emerald-500' : done.status === 'failed' ? 'bg-red-500' : 'bg-amber-400'
-                    : active ? 'bg-violet-400 layer-active' : 'bg-base-500/40'
-                }`}
-              />
-            )
-          })}
+const SUGGESTIONS = [
+  'Build a REST API with auth',
+  'Add a database model',
+  'Create a React component',
+  'Fix security vulnerabilities',
+  'Optimize performance'
+]
+
+function renderContent(text: string) {
+  const parts = text.split(/(```[\s\S]*?```)/g)
+  return parts.map((p, i) => {
+    if (p.startsWith('```')) {
+      const lines = p.slice(3, -3).split('\n')
+      const lang = lines[0].trim()
+      const code = lines.slice(1).join('\n').trim()
+      return (
+        <div key={i} style={{ marginTop: 10, borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 12px', background: 'rgba(255,255,255,0.03)', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>{lang || 'code'}</span>
+            <button onClick={() => navigator.clipboard.writeText(code)} style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', background: 'none', border: 'none', cursor: 'pointer', fontFamily: 'monospace' }}>copy</button>
+          </div>
+          <pre style={{ margin: 0, padding: '12px 14px', fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: 'rgba(255,255,255,0.75)', overflowX: 'auto', background: 'rgba(0,0,0,0.3)', lineHeight: 1.7 }}>
+            <code>{code}</code>
+          </pre>
         </div>
-        <span className="text-[10px] text-slate-500 font-mono">
-          {current < 10 ? LAYERS[current] : 'Complete'}
-        </span>
-      </div>
-    </div>
-  )
-}
-
-function CodeBlock({ code, language }: { code: string; language?: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = () => {
-    navigator.clipboard.writeText(code)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 1500)
-  }
-  return (
-    <div className="relative group mt-2 rounded-lg overflow-hidden border border-base-500/30">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-base-700/60 border-b border-base-500/20">
-        <span className="text-[10px] text-slate-500 font-mono">{language ?? 'code'}</span>
-        <button onClick={copy} className="text-[10px] text-slate-500 hover:text-slate-300 transition-colors font-mono">
-          {copied ? '✓ copied' : 'copy'}
-        </button>
-      </div>
-      <pre className="text-xs text-slate-300 p-3 overflow-x-auto leading-relaxed font-mono bg-base-800/60">
-        <code>{code}</code>
-      </pre>
-    </div>
-  )
-}
-
-function MessageContent({ content }: { content: string }) {
-  const parts = content.split(/(```[\s\S]*?```)/g)
-  return (
-    <div className="space-y-1">
-      {parts.map((part, i) => {
-        if (part.startsWith('```')) {
-          const lines = part.slice(3, -3).split('\n')
-          const lang = lines[0].trim()
-          const code = lines.slice(1).join('\n')
-          return <CodeBlock key={i} code={code} language={lang || undefined} />
-        }
-        if (!part.trim()) return null
-        return (
-          <p key={i} className="text-sm text-slate-300 leading-relaxed whitespace-pre-wrap">
-            {part}
-          </p>
-        )
-      })}
-    </div>
-  )
+      )
+    }
+    if (!p.trim()) return null
+    return <p key={i} style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.65, color: 'rgba(255,255,255,0.75)', whiteSpace: 'pre-wrap' }}>{p}</p>
+  })
 }
 
 export function AIPanel() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
-  const [pipelineLayer, setPipelineLayer] = useState(-1)
-  const [completedLayers, setCompletedLayers] = useState<LayerResult[]>([])
+  const [layerIdx, setLayerIdx] = useState(-1)
+  const [doneLayers, setDoneLayers] = useState<LayerResult[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const taRef = useRef<HTMLTextAreaElement>(null)
 
   const { settings, pipelineRunning, startPipeline, updateLayerProgress, completePipeline } = useAIStore()
   const { dna } = useDNAStore()
   const { activeProject, openTabs, activeTabId } = useProjectStore()
-
   const activeTab = openTabs.find(t => t.id === activeTabId)
 
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [msgs, pipelineLayer])
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs, layerIdx])
 
-  const addMsg = (msg: Omit<Msg, 'id'>) =>
-    setMsgs(prev => [...prev, { ...msg, id: `m-${Date.now()}-${Math.random()}` }])
+  const push = (m: Omit<Msg, 'id'>) => setMsgs(p => [...p, { ...m, id: `m${Date.now()}${Math.random()}` }])
 
   const send = useCallback(async () => {
-    const prompt = input.trim()
-    if (!prompt || streaming || pipelineRunning) return
+    const text = input.trim()
+    if (!text || streaming || pipelineRunning) return
     setInput('')
-
-    addMsg({ role: 'user', content: prompt })
+    push({ role: 'user', content: text })
 
     if (!orchestrator.hasProviders()) {
-      addMsg({ role: 'system', content: 'Add an API key in Settings to start building.' })
+      push({ role: 'system', content: 'Add an API key in Settings (⌘,) to get started.' })
       return
     }
 
-    // Always run pipeline if project is open, otherwise direct
-    if (activeProject) {
-      await runWithPipeline(prompt)
-    } else {
-      await runDirect(prompt)
-    }
-  }, [input, streaming, pipelineRunning, activeProject, dna, activeTab, settings])
+    activeProject ? await withPipeline(text) : await direct(text)
+  }, [input, streaming, pipelineRunning, activeProject, dna, activeTab])
 
-  const runDirect = async (prompt: string) => {
+  const direct = async (prompt: string) => {
     setStreaming(true)
-    const id = `m-${Date.now()}`
-    setMsgs(prev => [...prev, { id, role: 'assistant', content: '' }])
-
+    const id = `m${Date.now()}`
+    setMsgs(p => [...p, { id, role: 'assistant', content: '' }])
     try {
       const sys = dna
-        ? `You are PLATPHORM, an AI engineering OS. Project: ${dna.identity.systemName}. Purpose: ${dna.identity.corePurpose}. Always respect System Laws. Never create forbidden patterns.`
-        : 'You are PLATPHORM, an AI-native engineering OS. Prioritize architectural coherence, security, and production quality above all else.'
-
-      for await (const chunk of orchestrator.streamOrchestrate({
-        prompt: activeTab ? `Active file: ${activeTab.filePath}\n\n${prompt}` : prompt,
-        role: 'general',
-        options: { systemPrompt: sys }
-      })) {
-        setMsgs(prev => prev.map(m => m.id === id ? { ...m, content: m.content + chunk.content } : m))
+        ? `You are PLATPHORM, an AI engineering OS. Project: ${dna.identity.systemName}. ${dna.identity.corePurpose}. Respect all system laws.`
+        : 'You are PLATPHORM, an AI-native engineering OS. Always write production-quality, architecturally sound, secure code.'
+      for await (const chunk of orchestrator.streamOrchestrate({ prompt: activeTab ? `File: ${activeTab.filePath}\n\n${prompt}` : prompt, role: 'general', options: { systemPrompt: sys } })) {
+        setMsgs(p => p.map(m => m.id === id ? { ...m, content: m.content + chunk.content } : m))
       }
     } catch (err) {
-      setMsgs(prev => prev.map(m => m.id === id ? { ...m, content: `Error: ${String(err)}` } : m))
+      setMsgs(p => p.map(m => m.id === id ? { ...m, content: `Error: ${String(err)}` } : m))
     }
     setStreaming(false)
   }
 
-  const runWithPipeline = async (prompt: string) => {
-    startPipeline()
-    setPipelineLayer(0)
-    setCompletedLayers([])
-
-    const context: PipelineContext = {
-      projectPath: activeProject!.rootPath,
-      userPrompt: prompt,
-      selectedCode: activeTab?.content?.slice(0, 4000),
-      activeFile: activeTab?.filePath,
-      projectDNAAvailable: !!dna,
-      architectureDoc: undefined,
-      systemLaws: dna?.systemLaws.map(l => l.rule) ?? [],
+  const withPipeline = async (prompt: string) => {
+    startPipeline(); setLayerIdx(0); setDoneLayers([])
+    const ctx: PipelineContext = {
+      projectPath: activeProject!.rootPath, userPrompt: prompt,
+      selectedCode: activeTab?.content?.slice(0, 4000), activeFile: activeTab?.filePath,
+      projectDNAAvailable: !!dna, architectureDoc: undefined,
+      systemLaws: dna?.systemLaws.map((l: any) => l.rule) ?? [],
       forbiddenPatterns: dna?.forbiddenPatterns ?? [],
-      lockedSystems: dna?.lockedSystems.map(s => s.name) ?? [],
+      lockedSystems: dna?.lockedSystems.map((s: any) => s.name) ?? [],
       relevantRegistries: ''
     }
-
-    const id = `m-${Date.now()}`
-    setMsgs(prev => [...prev, { id, role: 'assistant', content: '' }])
-
+    const id = `m${Date.now()}`
+    setMsgs(p => [...p, { id, role: 'assistant', content: '' }])
     try {
-      const result = await runPipeline(context, (index, _name, layerResult) => {
-        setPipelineLayer(index)
-        updateLayerProgress(index, _name, layerResult)
-        if (layerResult) setCompletedLayers(prev => [...prev, layerResult])
+      const result = await runPipeline(ctx, (idx, name, lr) => {
+        setLayerIdx(idx)
+        updateLayerProgress(idx, name, lr)
+        if (lr) setDoneLayers(p => [...p, lr])
       })
-
       completePipeline(result)
-      setPipelineLayer(10)
+      setLayerIdx(10)
 
-      const generatedContent = result.executionPlan?.changes
-        ?.filter(c => c.after)
-        .map(c => c.after!)
-        .join('\n\n') ?? ''
+      const generated = result.executionPlan?.changes?.filter(c => c.after).map(c => c.after!).join('\n\n') ?? ''
+      let reply = result.approved
+        ? `${result.overallScore}/100 — all checks passed.\n\n${generated || 'Implementation plan validated and ready to apply.'}`
+        : `${result.blockers.length} issue(s) found:\n\n${result.blockers.map(b => `• ${b.message}`).join('\n')}`
 
-      let response = ''
-      if (result.approved) {
-        response = `Done — ${result.overallScore}/100 across all checks.\n\n`
-        if (generatedContent) response += generatedContent
-        else response += 'Implementation plan validated. Review the changes in the Pipeline tab.'
-      } else {
-        response = `${result.blockers.length} issue(s) need attention before this can be applied:\n\n`
-        result.blockers.forEach(b => { response += `• ${b.message}\n` })
-        if (result.warnings.length > 0) {
-          response += `\n${result.warnings.length} warning(s) noted.`
-        }
-      }
-
-      setMsgs(prev => prev.map(m => m.id === id ? {
-        ...m,
-        content: response,
-        pipelineScore: result.overallScore,
-        pipelineApproved: result.approved,
-        layers: result.layers
-      } : m))
+      setMsgs(p => p.map(m => m.id === id ? { ...m, content: reply, score: result.overallScore, approved: result.approved } : m))
     } catch (err) {
-      setMsgs(prev => prev.map(m => m.id === id ? { ...m, content: `Pipeline error: ${String(err)}` } : m))
+      setMsgs(p => p.map(m => m.id === id ? { ...m, content: `Pipeline error: ${String(err)}` } : m))
     }
-
-    setPipelineLayer(-1)
-    setCompletedLayers([])
+    setLayerIdx(-1); setDoneLayers([])
   }
 
-  const isRunning = streaming || pipelineRunning
+  const busy = streaming || pipelineRunning
 
   return (
-    <div className="flex flex-col h-full bg-base-900 border-l border-base-500/30">
+    <div style={{ width: 320, flexShrink: 0, background: '#090a11', borderLeft: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+
       {/* Header */}
-      <div className="flex items-center gap-2.5 px-4 py-3 border-b border-base-500/20 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <div className={`w-1.5 h-1.5 rounded-full ${isRunning ? 'bg-violet-400 animate-pulse' : 'bg-emerald-500'}`} />
-          <span className="text-xs font-semibold text-slate-400">PLATPHORM AI</span>
+      <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        <div style={{ width: 28, height: 28, borderRadius: 8, background: 'linear-gradient(135deg, rgba(124,58,237,0.4), rgba(79,70,229,0.3))', border: '1px solid rgba(124,58,237,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: busy ? '0 0 12px rgba(124,58,237,0.4)' : 'none', transition: 'box-shadow 0.3s' }}>
+          <span style={{ fontSize: 13, fontWeight: 800, background: 'linear-gradient(135deg, #c4b5fd, #7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>P</span>
         </div>
-        {dna && (
-          <span className="text-[10px] text-slate-600 font-mono ml-auto truncate max-w-[120px]" title={dna.identity.systemName}>
-            {dna.identity.systemName}
-          </span>
-        )}
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.75)' }}>PLATPHORM AI</div>
+          <div style={{ fontSize: 10, color: busy ? '#a78bfa' : dna ? '#22c55e' : 'rgba(255,255,255,0.2)' }}>
+            {busy ? 'Analyzing...' : dna ? dna.identity.systemName : 'Ready'}
+          </div>
+        </div>
+        <div style={{ width: 6, height: 6, borderRadius: '50%', background: busy ? '#a78bfa' : '#22c55e', transition: 'background 0.3s', boxShadow: busy ? '0 0 8px #a78bfa' : '0 0 6px #22c55e' }} />
       </div>
 
-      {/* Pipeline progress (only when running) */}
-      {pipelineRunning && pipelineLayer >= 0 && (
-        <div className="px-4 py-2 border-b border-base-500/20 bg-base-800/60 flex-shrink-0">
-          <PipelineProgress current={pipelineLayer} layers={completedLayers} />
+      {/* Pipeline bar */}
+      {pipelineRunning && layerIdx >= 0 && (
+        <div style={{ padding: '8px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(124,58,237,0.04)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', gap: 3, marginBottom: 5 }}>
+            {LAYERS.map((name, i) => {
+              const done = doneLayers[i]
+              const active = i === layerIdx && !done
+              let bg = 'rgba(255,255,255,0.08)'
+              if (done) bg = done.status === 'passed' ? '#22c55e' : done.status === 'failed' ? '#ef4444' : '#f59e0b'
+              if (active) bg = '#a78bfa'
+              return <div key={name} title={name} style={{ flex: 1, height: 3, borderRadius: 99, background: bg, transition: 'background 0.3s', opacity: active ? 1 : 0.8 }} />
+            })}
+          </div>
+          <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', fontFamily: 'monospace' }}>
+            {layerIdx < 10 ? `${String(layerIdx+1).padStart(2,'0')} · ${LAYERS[layerIdx]}` : 'Complete'}
+          </div>
         </div>
       )}
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+      <div style={{ flex: 1, overflowY: 'auto', padding: '16px 14px', display: 'flex', flexDirection: 'column', gap: 16 }}>
         {msgs.length === 0 && (
-          <div className="flex flex-col items-center justify-center h-full text-center gap-4 panel-enter">
-            <div className="w-10 h-10 rounded-xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.5">
-                <path d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"/>
-              </svg>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 20, textAlign: 'center' }}>
+            <div style={{ width: 44, height: 44, borderRadius: 14, background: 'rgba(124,58,237,0.1)', border: '1px solid rgba(124,58,237,0.2)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="1.5"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
             </div>
-            <div className="space-y-1">
-              <div className="text-sm font-medium text-slate-300">What do you want to build?</div>
-              <div className="text-xs text-slate-600 max-w-[200px] leading-relaxed">
-                {activeProject
-                  ? 'Every request is validated through governance protocol automatically.'
-                  : 'Open a project folder to enable full governance mode.'}
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: 6 }}>Build anything</div>
+              <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', lineHeight: 1.6, maxWidth: 220 }}>
+                {activeProject ? 'Every request is governed by your project DNA.' : 'Open a project to enable full governance mode.'}
               </div>
             </div>
-            <div className="flex flex-col gap-1.5 w-full max-w-[220px]">
-              {['Build a REST API endpoint', 'Add authentication', 'Create a data model', 'Fix this code'].map(s => (
-                <button
-                  key={s}
-                  onClick={() => { setInput(s); textareaRef.current?.focus() }}
-                  className="text-xs text-left px-3 py-2 rounded-lg border border-base-400/30 text-slate-500 hover:text-slate-300 hover:border-violet-500/30 hover:bg-violet-500/5 transition-all"
+            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {SUGGESTIONS.map(s => (
+                <button key={s} onClick={() => { setInput(s); taRef.current?.focus() }}
+                  style={{ textAlign: 'left', padding: '8px 12px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 10, cursor: 'pointer', fontSize: 12, color: 'rgba(255,255,255,0.4)', transition: 'all 0.15s', fontFamily: 'inherit' }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(124,58,237,0.08)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(124,58,237,0.25)'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.7)' }}
+                  onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.03)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.07)'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.4)' }}
                 >
                   {s}
                 </button>
@@ -276,38 +192,32 @@ export function AIPanel() {
         )}
 
         {msgs.map(msg => (
-          <div key={msg.id} className="space-y-1.5 panel-enter">
+          <div key={msg.id}>
             {msg.role === 'user' && (
-              <div className="flex justify-end">
-                <div className="max-w-[85%] bg-violet-600/15 border border-violet-500/20 rounded-2xl rounded-tr-sm px-3.5 py-2.5 text-sm text-slate-200">
+              <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                <div style={{ maxWidth: '85%', background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: '16px 16px 4px 16px', padding: '10px 14px', fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
                   {msg.content}
                 </div>
               </div>
             )}
             {msg.role === 'assistant' && (
-              <div className="space-y-2">
-                {/* Pipeline badge */}
-                {msg.pipelineScore !== undefined && (
-                  <div className={`inline-flex items-center gap-1.5 text-[10px] px-2 py-0.5 rounded-full border font-mono ${
-                    msg.pipelineApproved
-                      ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-400'
-                      : 'border-red-500/30 bg-red-500/10 text-red-400'
-                  }`}>
-                    <span>{msg.pipelineApproved ? '✓' : '✗'}</span>
-                    <span>{msg.pipelineScore}/100</span>
-                    <span className="text-current/50">· 10 layers</span>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {msg.score !== undefined && (
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 99, border: msg.approved ? '1px solid rgba(34,197,94,0.3)' : '1px solid rgba(239,68,68,0.3)', background: msg.approved ? 'rgba(34,197,94,0.08)' : 'rgba(239,68,68,0.08)', fontSize: 10, fontFamily: 'monospace', width: 'fit-content' }}>
+                    <span style={{ color: msg.approved ? '#22c55e' : '#ef4444' }}>{msg.approved ? '✓' : '✗'}</span>
+                    <span style={{ color: msg.approved ? '#86efac' : '#fca5a5' }}>{msg.score}/100 · 10 layers</span>
                   </div>
                 )}
-                <div className="text-sm text-slate-300 leading-relaxed">
-                  <MessageContent content={msg.content} />
-                  {isRunning && msg === msgs[msgs.length - 1] && !msg.content && (
-                    <span className="inline-block w-1.5 h-4 bg-violet-400 cursor-blink rounded-sm" />
-                  )}
-                </div>
+                <div>{renderContent(msg.content)}</div>
+                {busy && msg === msgs[msgs.length - 1] && !msg.content && (
+                  <div style={{ display: 'flex', gap: 3, padding: '8px 0' }}>
+                    {[0,1,2].map(i => <span key={i} style={{ width: 4, height: 4, borderRadius: '50%', background: '#7c3aed', display: 'block', animation: `blink 1.2s ${i*0.2}s ease-in-out infinite` }} />)}
+                  </div>
+                )}
               </div>
             )}
             {msg.role === 'system' && (
-              <div className="text-[11px] text-slate-600 text-center py-1">{msg.content}</div>
+              <div style={{ textAlign: 'center', fontSize: 11, color: 'rgba(255,255,255,0.2)', padding: '4px 0' }}>{msg.content}</div>
             )}
           </div>
         ))}
@@ -315,30 +225,36 @@ export function AIPanel() {
       </div>
 
       {/* Input */}
-      <div className="p-3 border-t border-base-500/20 flex-shrink-0">
-        <div className="relative bg-base-700/50 border border-base-400/30 rounded-xl focus-within:border-violet-500/50 transition-colors">
+      <div style={{ padding: '10px 12px 12px', borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+        <div style={{ position: 'relative', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.09)', borderRadius: 14, transition: 'border-color 0.2s' }}
+          onFocus={() => {}} >
           <textarea
-            ref={textareaRef}
+            ref={taRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send() } }}
             placeholder={activeProject ? 'Build anything...' : 'Ask PLATPHORM...'}
             rows={3}
-            className="w-full bg-transparent px-3.5 pt-3 pb-10 text-sm text-slate-200 placeholder-slate-600 resize-none focus:outline-none font-sans"
+            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', padding: '12px 14px 36px', fontSize: 13, color: 'rgba(255,255,255,0.8)', resize: 'none', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 }}
           />
-          <div className="absolute bottom-2.5 right-2.5 flex items-center gap-2">
-            <span className="text-[10px] text-slate-600 font-mono">⌘↵</span>
+          <div style={{ position: 'absolute', bottom: 8, left: 12, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.15)', fontFamily: 'monospace' }}>⌘↵ send</span>
             <button
               onClick={send}
-              disabled={!input.trim() || isRunning}
-              className="w-7 h-7 rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-base-600/50 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
+              disabled={!input.trim() || busy}
+              style={{
+                width: 28, height: 28, borderRadius: 8,
+                background: input.trim() && !busy ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'rgba(255,255,255,0.06)',
+                border: 'none', cursor: input.trim() && !busy ? 'pointer' : 'not-allowed',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: input.trim() && !busy ? '0 0 12px rgba(124,58,237,0.4)' : 'none',
+                transition: 'all 0.2s', flexShrink: 0
+              }}
             >
-              {isRunning ? (
-                <div className="w-3 h-3 border border-slate-500 border-t-transparent rounded-full animate-spin" />
+              {busy ? (
+                <div style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.3)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
               ) : (
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-                  <line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>
-                </svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               )}
             </button>
           </div>

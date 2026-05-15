@@ -3,8 +3,13 @@ import { useProjectStore } from '../../store/projectStore'
 import { useAIStore } from '../../store/aiStore'
 import { MonacoEditor } from './MonacoEditor'
 
+const EXT_COLOR: Record<string, string> = {
+  ts:'#3b82f6', tsx:'#3b82f6', js:'#eab308', jsx:'#60a5fa',
+  css:'#a855f7', json:'#f59e0b', md:'#64748b', py:'#22c55e',
+}
+
 export function EditorArea() {
-  const { openTabs, activeTabId, closeTab, setActiveTab, updateTabContent, markTabClean } = useProjectStore()
+  const { openTabs, activeTabId, closeTab, setActiveTab, markTabClean } = useProjectStore()
   const { settings } = useAIStore()
   const activeTab = openTabs.find(t => t.id === activeTabId)
 
@@ -14,47 +19,55 @@ export function EditorArea() {
     markTabClean(activeTab.id)
   }, [activeTab, markTabClean])
 
-  if (openTabs.length === 0) return <WelcomeView />
+  if (openTabs.length === 0) return <Welcome />
 
   return (
-    <div className="flex flex-col h-full">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: '#0b0c14' }}>
       {/* Tab bar */}
-      <div className="flex items-end h-9 bg-base-800 border-b border-base-500/30 overflow-x-auto flex-shrink-0" style={{ scrollbarWidth: 'none' }}>
+      <div style={{
+        display: 'flex', alignItems: 'flex-end', height: 38,
+        background: '#08090f', borderBottom: '1px solid rgba(255,255,255,0.07)',
+        overflowX: 'auto', flexShrink: 0
+      }}>
         {openTabs.map(tab => {
-          const fileName = tab.filePath.split('/').pop() ?? tab.filePath
-          const isActive = tab.id === activeTabId
+          const name = tab.filePath.split('/').pop() ?? tab.filePath
+          const ext = name.split('.').pop() ?? ''
+          const active = tab.id === activeTabId
+          const dotColor = EXT_COLOR[ext] ?? 'rgba(255,255,255,0.3)'
           return (
             <div
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`
-                relative flex items-center gap-2 px-4 h-full cursor-pointer select-none
-                border-r border-base-500/20 flex-shrink-0 group transition-colors text-xs
-                ${isActive
-                  ? 'bg-base-900 text-slate-200'
-                  : 'bg-base-800 text-slate-500 hover:text-slate-300 hover:bg-base-700/50'
-                }
-              `}
+              style={{
+                position: 'relative', display: 'flex', alignItems: 'center', gap: 6,
+                padding: '0 14px', height: '100%', cursor: 'pointer', flexShrink: 0,
+                background: active ? '#0b0c14' : 'transparent',
+                borderRight: '1px solid rgba(255,255,255,0.05)',
+                userSelect: 'none', transition: 'background 0.1s'
+              }}
             >
-              {isActive && <span className="absolute top-0 left-0 right-0 h-px bg-violet-500" />}
-              <span className="font-mono">{fileName}</span>
-              {tab.isDirty && <span className="w-1.5 h-1.5 rounded-full bg-amber-400/70" />}
+              {/* Active top indicator */}
+              {active && <span style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 1, background: 'linear-gradient(to right, #7c3aed, #a78bfa)' }} />}
+              {/* File type dot */}
+              <span style={{ width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0, opacity: 0.8 }} />
+              <span style={{ fontSize: 12, fontFamily: 'monospace', color: active ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.35)', whiteSpace: 'nowrap' }}>
+                {name}
+              </span>
+              {tab.isDirty && <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', flexShrink: 0 }} />}
               <button
                 onClick={e => { e.stopPropagation(); closeTab(tab.id) }}
-                className="opacity-0 group-hover:opacity-100 hover:text-slate-100 text-slate-500 ml-0.5 transition-opacity leading-none"
-              >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-                  <path d="M9.5 3.5L6 7 2.5 3.5 3.5 2.5 6 6 8.5 2.5 9.5 3.5zM2.5 8.5L6 5l3.5 3.5-1 1L6 6 3.5 9.5l-1-1z"/>
-                </svg>
-              </button>
+                style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 2, color: 'rgba(255,255,255,0.2)', fontSize: 14, lineHeight: 1, borderRadius: 3, transition: 'all 0.1s', marginLeft: 2 }}
+                onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.7)'; (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.08)' }}
+                onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.2)'; (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+              >×</button>
             </div>
           )
         })}
       </div>
 
       {/* Editor */}
-      <div className="flex-1 overflow-hidden" onKeyDown={e => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); handleSave() } }}>
-        {activeTab ? (
+      <div style={{ flex: 1, overflow: 'hidden' }} onKeyDown={e => { if ((e.metaKey||e.ctrlKey) && e.key==='s') { e.preventDefault(); handleSave() } }}>
+        {activeTab && (
           <MonacoEditor
             key={activeTab.id}
             tabId={activeTab.id}
@@ -64,51 +77,67 @@ export function EditorArea() {
             fontSize={settings.fontSize}
             fontFamily={settings.fontFamily}
           />
-        ) : (
-          <WelcomeView />
         )}
       </div>
     </div>
   )
 }
 
-function WelcomeView() {
+function Welcome() {
+  const { activeProject } = useProjectStore()
   return (
-    <div className="h-full flex flex-col items-center justify-center bg-base-900 select-none">
-      <div className="text-center space-y-6 panel-enter">
-        {/* Logo mark */}
-        <div className="flex justify-center">
-          <div className="relative">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-600/20 to-violet-900/20 border border-violet-500/20 flex items-center justify-center">
-              <span className="text-2xl font-bold text-violet-400 tracking-tight">P</span>
-            </div>
-            <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-emerald-500 border-2 border-base-900 flex items-center justify-center">
-              <span className="text-[8px] text-white font-bold">✓</span>
-            </div>
+    <div style={{
+      flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      background: '#0b0c14', position: 'relative', overflow: 'hidden'
+    }}>
+      {/* Background glow */}
+      <div style={{ position: 'absolute', top: '30%', left: '50%', transform: 'translate(-50%,-50%)', width: 500, height: 300, background: 'radial-gradient(ellipse, rgba(124,58,237,0.08) 0%, transparent 70%)', pointerEvents: 'none' }} />
+
+      {/* Grid overlay */}
+      <div style={{ position: 'absolute', inset: 0, backgroundImage: 'linear-gradient(rgba(124,58,237,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(124,58,237,0.04) 1px, transparent 1px)', backgroundSize: '48px 48px', pointerEvents: 'none' }} />
+
+      <div style={{ position: 'relative', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 0 }}>
+        {/* Logo */}
+        <div style={{ position: 'relative', marginBottom: 28 }}>
+          <div style={{
+            width: 72, height: 72, borderRadius: 20,
+            background: 'linear-gradient(135deg, rgba(124,58,237,0.3), rgba(79,70,229,0.2))',
+            border: '1px solid rgba(124,58,237,0.3)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: '0 0 40px rgba(124,58,237,0.2), 0 0 80px rgba(124,58,237,0.1)'
+          }}>
+            <span style={{ fontSize: 32, fontWeight: 800, background: 'linear-gradient(135deg, #a78bfa, #7c3aed)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>P</span>
           </div>
+          {activeProject && (
+            <div style={{ position: 'absolute', bottom: -4, right: -4, width: 20, height: 20, borderRadius: '50%', background: '#22c55e', border: '2px solid #0b0c14', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 10, color: 'white', fontWeight: 700 }}>✓</span>
+            </div>
+          )}
         </div>
 
-        <div className="space-y-1">
-          <div className="text-xl font-semibold text-slate-200 tracking-tight">PLATPHORM</div>
-          <div className="text-sm text-slate-500">AI-Native Engineering OS</div>
+        <div style={{ fontSize: 26, fontWeight: 700, letterSpacing: 6, textTransform: 'uppercase', background: 'linear-gradient(135deg, rgba(255,255,255,0.9), rgba(255,255,255,0.4))', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', marginBottom: 8 }}>
+          PLATPHORM
+        </div>
+        <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.25)', letterSpacing: 1, marginBottom: 40 }}>
+          AI-Native Engineering OS
         </div>
 
-        <div className="grid grid-cols-2 gap-2 max-w-xs text-xs">
-          {[
-            { key: '⌘O', action: 'Open folder' },
-            { key: '⌘K', action: 'Command palette' },
-            { key: '⌘⇧P', action: 'AI builder' },
-            { key: '⌘,', action: 'Settings' }
-          ].map(({ key, action }) => (
-            <div key={action} className="flex items-center gap-2 text-slate-600">
-              <kbd className="bg-base-600/60 border border-base-400/30 rounded px-1.5 py-0.5 font-mono text-[10px] text-slate-500">{key}</kbd>
-              <span>{action}</span>
+        {/* Hints */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 40 }}>
+          {[['⌘O','Open project'],['⌘,','Settings'],['⌘K','Command palette'],['⌘↵','Send to AI']].map(([k,l]) => (
+            <div key={l} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <kbd style={{ background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '2px 8px', fontSize: 10, fontFamily: 'monospace', color: 'rgba(255,255,255,0.4)', whiteSpace: 'nowrap' }}>{k}</kbd>
+              <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.25)' }}>{l}</span>
             </div>
           ))}
         </div>
 
-        <div className="text-[11px] text-slate-700 max-w-xs leading-relaxed">
-          Open a project to initialize DNA analysis. Every AI request follows governance protocol automatically.
+        {/* Pill */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', borderRadius: 99, padding: '6px 16px' }}>
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#22c55e', flexShrink: 0 }} />
+          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)' }}>
+            {activeProject ? `${activeProject.name} · DNA ready` : 'Open a project to begin'}
+          </span>
         </div>
       </div>
     </div>
