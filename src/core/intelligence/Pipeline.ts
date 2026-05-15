@@ -13,8 +13,31 @@ import { runSelfCritiqueLayer } from './layers/10-SelfCritiqueLayer'
 export type PipelineProgressCallback = (
   layerIndex: number,
   layerName: string,
+  description: string,
   result?: LayerResult
 ) => void
+
+const LAYER_META: Array<{ key: string; label: string; startMsg: string }> = [
+  { key: 'intent',        label: '01 · Intent',        startMsg: 'Parsing your request and identifying scope...' },
+  { key: 'architecture',  label: '02 · Architecture',   startMsg: 'Checking architectural constraints and fit...' },
+  { key: 'security',      label: '03 · Security',       startMsg: 'Scanning for security risks and vulnerabilities...' },
+  { key: 'dependency',    label: '04 · Dependencies',   startMsg: 'Auditing dependencies and version conflicts...' },
+  { key: 'performance',   label: '05 · Performance',    startMsg: 'Evaluating performance implications...' },
+  { key: 'continuity',    label: '06 · Continuity',     startMsg: 'Verifying system law compliance...' },
+  { key: 'validation',    label: '07 · Validation',     startMsg: 'Cross-checking against project DNA...' },
+  { key: 'execution',     label: '08 · Execution',      startMsg: 'Planning implementation strategy...' },
+  { key: 'observability', label: '09 · Observability',  startMsg: 'Designing logging and monitoring hooks...' },
+  { key: 'selfCritique',  label: '10 · Self-Critique',  startMsg: 'Running final quality self-assessment...' }
+]
+
+function resultSummary(result: LayerResult): string {
+  const criticals = result.findings.filter(f => f.severity === 'critical').length
+  const highs = result.findings.filter(f => f.severity === 'high').length
+  if (result.status === 'skipped') return 'Skipped — blocked by earlier layer'
+  if (criticals > 0) return `${criticals} critical issue${criticals > 1 ? 's' : ''} found`
+  if (highs > 0) return `Passed with ${highs} warning${highs > 1 ? 's' : ''} · ${result.score}/100`
+  return `Passed · ${result.score}/100`
+}
 
 export async function runPipeline(
   context: PipelineContext,
@@ -26,76 +49,78 @@ export async function runPipeline(
   let executionPlan: ExecutionPlan | undefined
   let scorecard: QualityScorecard | undefined
 
-  const notify = (index: number, name: string, result?: LayerResult) => {
-    onProgress?.(index, name, result)
+  const notify = (index: number, result?: LayerResult) => {
+    const meta = LAYER_META[index]
+    const desc = result ? resultSummary(result) : meta.startMsg
+    onProgress?.(index, meta.key, desc, result)
   }
 
   // Layer 1: Intent
-  notify(0, 'intent')
+  notify(0)
   const intentResult = await runIntentLayer(context)
   layers.push(intentResult)
-  notify(0, 'intent', intentResult)
+  notify(0, intentResult)
 
   // Layer 2: Architecture
-  notify(1, 'architecture')
+  notify(1)
   const archResult = await runArchitectureLayer(context)
   layers.push(archResult)
-  notify(1, 'architecture', archResult)
+  notify(1, archResult)
 
   // Layer 3: Security
-  notify(2, 'security')
+  notify(2)
   const secResult = await runSecurityLayer(context)
   layers.push(secResult)
-  notify(2, 'security', secResult)
+  notify(2, secResult)
 
   // Layer 4: Dependency
-  notify(3, 'dependency')
+  notify(3)
   const depResult = await runDependencyLayer(context)
   layers.push(depResult)
-  notify(3, 'dependency', depResult)
+  notify(3, depResult)
 
   // Layer 5: Performance
-  notify(4, 'performance')
+  notify(4)
   const perfResult = await runPerformanceLayer(context)
   layers.push(perfResult)
-  notify(4, 'performance', perfResult)
+  notify(4, perfResult)
 
   // Layer 6: Continuity
-  notify(5, 'continuity')
+  notify(5)
   const contResult = await runContinuityLayer(context)
   layers.push(contResult)
-  notify(5, 'continuity', contResult)
+  notify(5, contResult)
 
   // Layer 7: Validation
-  notify(6, 'validation')
+  notify(6)
   const valResult = await runValidationLayer(context)
   layers.push(valResult)
-  notify(6, 'validation', valResult)
+  notify(6, valResult)
 
   // Determine if execution should proceed (no critical blockers in layers 1-7)
   const criticalBlockers = layers.flatMap((l) => l.findings).filter((f) => f.severity === 'critical')
   const canExecute = criticalBlockers.length === 0
 
   // Layer 8: Execution
-  notify(7, 'execution')
+  notify(7)
   const execResult = await runExecutionLayer(context, canExecute)
   if ('executionPlan' in execResult) executionPlan = execResult.executionPlan
   layers.push(execResult)
-  notify(7, 'execution', execResult)
+  notify(7, execResult)
 
   // Layer 9: Observability
-  notify(8, 'observability')
+  notify(8)
   const obsResult = await runObservabilityLayer(context)
   layers.push(obsResult)
-  notify(8, 'observability', obsResult)
+  notify(8, obsResult)
 
   // Layer 10: Self-Critique (runs on the execution plan / generated code)
   const generatedContent = executionPlan?.changes?.map((c) => c.after ?? '').join('\n\n') ?? ''
-  notify(9, 'selfCritique')
+  notify(9)
   const critiqueResult = await runSelfCritiqueLayer(context, generatedContent)
   if ('scorecard' in critiqueResult) scorecard = critiqueResult.scorecard
   layers.push(critiqueResult)
-  notify(9, 'selfCritique', critiqueResult)
+  notify(9, critiqueResult)
 
   // Compute overall score
   const scores = layers.map((l) => l.score)
