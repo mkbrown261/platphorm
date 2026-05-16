@@ -15,6 +15,7 @@
 
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
+import { parseJSONFromAI } from '../utils/parseJSON'
 
 export async function runIntentLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -50,7 +51,7 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'architect' })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = parseJSONFromAI(result.result.content)
 
     // Only add ambiguity warning, never block on it — agent resolves ambiguity
     if (parsed.isAmbiguous) {
@@ -110,9 +111,4 @@ Respond in JSON:
       timestamp: Date.now()
     }
   }
-}
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : '{}'
 }

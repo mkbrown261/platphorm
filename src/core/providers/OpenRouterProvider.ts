@@ -14,7 +14,7 @@ const OPENROUTER_MODELS: ModelConfig[] = [
     recommendedRoles: ['architect', 'security']
   },
   {
-    id: 'anthropic/claude-sonnet-4-5',
+    id: 'anthropic/claude-sonnet-4-6',
     name: 'Claude Sonnet 4.5',
     provider: 'openrouter',
     contextWindow: 200000,
@@ -72,16 +72,16 @@ export class OpenRouterProvider extends BaseAIProvider {
   }
 
   async generate(prompt: string, options: GenerationOptions = {}): Promise<GenerationResult> {
-    const model = options.model ?? 'anthropic/claude-sonnet-4-5'
+    const model = options.model ?? 'anthropic/claude-sonnet-4-6'
     const start = Date.now()
 
-    const response = await this.client.chat.completions.create({
+    const response = await this.withRetry(() => this.client.chat.completions.create({
       model,
       messages: this.buildMessages(prompt, options.systemPrompt) as any,
       temperature: options.temperature ?? 0.3,
       max_tokens: options.maxTokens ?? 4096,
       stream: false
-    })
+    }))
 
     const content = response.choices[0]?.message?.content ?? ''
     return {
@@ -98,7 +98,7 @@ export class OpenRouterProvider extends BaseAIProvider {
   }
 
   async *stream(prompt: string, options: GenerationOptions = {}): AsyncGenerator<StreamChunk> {
-    const model = options.model ?? 'anthropic/claude-sonnet-4-5'
+    const model = options.model ?? 'anthropic/claude-sonnet-4-6'
 
     const stream = await this.client.chat.completions.create({
       model,

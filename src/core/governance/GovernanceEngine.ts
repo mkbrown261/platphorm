@@ -47,39 +47,78 @@ class GovernanceEngine {
 
     for (const law of dna.systemLaws) {
       if (!law.locked) continue
+      const r = law.rule.toLowerCase()
 
-      // Law 4: No hardcoded secrets
-      if (law.id === 4 && /secret|password|apikey/i.test(code) && /=\s*["'][^"']+["']/i.test(code)) {
-        violations.push({
-          lawId: 4,
-          pattern: 'hardcoded-secret',
-          description: 'System Law 4 violated: No hardcoded secrets',
-          severity: 'critical'
-        })
-      }
-
-      // Law 5: No business logic inside UI components
-      if (law.id === 5 && /\.tsx/.test(code) && /fetch\(|axios\.|supabase\./i.test(code)) {
-        violations.push({
-          lawId: 5,
-          pattern: 'business-logic-in-ui',
-          description: 'System Law 5 violated: Business logic detected in UI component',
-          severity: 'high'
-        })
-      }
-
-      // Law 10: No placeholder logic
-      if (law.id === 10 && /TODO|FIXME|placeholder|not implemented|coming soon/i.test(code)) {
-        violations.push({
-          lawId: 10,
-          pattern: 'placeholder-logic',
-          description: 'System Law 10 violated: Placeholder logic in production code',
-          severity: 'high'
-        })
+      // Match by rule TEXT, not by ID — works for any AI-generated law
+      const checks = this._lawChecks(code, r)
+      for (const v of checks) {
+        violations.push({ lawId: law.id, pattern: v.pattern, description: `System Law ${law.id} violated: ${law.rule} — ${v.detail}`, severity: v.severity })
       }
     }
 
     return violations
+  }
+
+  private _lawChecks(code: string, rule: string): Array<{ pattern: string; detail: string; severity: DNAViolation['severity'] }> {
+    const hits: Array<{ pattern: string; detail: string; severity: DNAViolation['severity'] }> = []
+
+    // Hardcoded secrets / credentials
+    if (/secret|credential|password|hardcod|api.?key/i.test(rule)) {
+      if (/(?:secret|password|api[_-]?key|token|auth)\s*[:=]\s*["'][^"']{6,}/i.test(code)) {
+        hits.push({ pattern: 'hardcoded-secret', detail: 'hardcoded credential detected', severity: 'critical' })
+      }
+    }
+
+    // Business logic in UI / component separation
+    if (/ui|component|presentation|business.?logic|separation/i.test(rule)) {
+      if (/\.tsx?/.test(code) && /\bfetch\(|axios\.|supabase\.|prisma\.|mongoose\./i.test(code)) {
+        hits.push({ pattern: 'business-logic-in-ui', detail: 'direct API/DB call inside UI component', severity: 'high' })
+      }
+    }
+
+    // No placeholders / stubs in production
+    if (/placeholder|stub|todo|fixme|incomplete|not.?implemented/i.test(rule)) {
+      if (/\b(?:TODO|FIXME|HACK|XXX)\b|placeholder|not\s+implemented|coming\s+soon/i.test(code)) {
+        hits.push({ pattern: 'placeholder-logic', detail: 'placeholder or stub code present', severity: 'high' })
+      }
+    }
+
+    // No console.log / debug output in production
+    if (/console|debug|logging|production.?log/i.test(rule)) {
+      if (/console\.(log|debug|info)\s*\(/i.test(code)) {
+        hits.push({ pattern: 'console-in-production', detail: 'console.log/debug in production code', severity: 'medium' })
+      }
+    }
+
+    // No `any` type / type safety
+    if (/type.?safe|no.?any|strict.?type|typescript/i.test(rule)) {
+      if (/:\s*any\b|as\s+any\b/i.test(code)) {
+        hits.push({ pattern: 'unsafe-any-type', detail: 'explicit `any` type undermines type safety', severity: 'medium' })
+      }
+    }
+
+    // No direct DOM manipulation
+    if (/dom|document\.|direct.?manip|react/i.test(rule)) {
+      if (/document\.(getElementById|querySelector|createElement|body)\b/i.test(code)) {
+        hits.push({ pattern: 'direct-dom-manipulation', detail: 'direct DOM manipulation bypasses React', severity: 'medium' })
+      }
+    }
+
+    // No mutating shared/global state directly
+    if (/global.?state|shared.?state|immutab|mutation/i.test(rule)) {
+      if (/\bglobal\b\s*\.\s*\w+\s*=|window\.\w+\s*=/i.test(code)) {
+        hits.push({ pattern: 'global-mutation', detail: 'direct mutation of global/window state', severity: 'high' })
+      }
+    }
+
+    // Error handling required
+    if (/error.?handl|catch|unhandled|async/i.test(rule)) {
+      if (/catch\s*\([^)]*\)\s*\{\s*\}/i.test(code)) {
+        hits.push({ pattern: 'empty-catch', detail: 'empty catch block swallows errors silently', severity: 'high' })
+      }
+    }
+
+    return hits
   }
 
   logGovernanceEvent(event: Omit<GovernanceEvent, 'id' | 'timestamp'>): void {

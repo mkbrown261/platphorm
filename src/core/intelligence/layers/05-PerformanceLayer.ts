@@ -1,5 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PerformanceFinding, PipelineContext } from '../../../types'
+import { parseJSONFromAI } from '../utils/parseJSON'
 
 const STATIC_CHECKS: Array<{ pattern: RegExp; message: string; severity: 'high' | 'medium' | 'low'; impact: PerformanceFinding['impact'] }> = [
   { pattern: /useEffect\([^,]+\)(?!\s*,\s*\[)/, message: 'useEffect missing dependency array — causes infinite rerender loop', severity: 'high', impact: 'runtime' },
@@ -93,7 +94,7 @@ Respond ONLY with JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'performance' })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = parseJSONFromAI(result.result.content)
 
     for (const f of parsed.findings ?? []) {
       findings.push({
@@ -128,9 +129,4 @@ Respond ONLY with JSON:
       timestamp: Date.now()
     }
   }
-}
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : '{}'
 }

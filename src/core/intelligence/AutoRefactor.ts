@@ -18,6 +18,8 @@
 import { orchestrator } from '../providers/AIOrchestrator'
 import type { FileChange, Finding, PipelineContext, PipelineResult } from '../../types'
 import { buildCompactIdentity } from './UnifiedIdentity'
+import { parseJSONFromAI } from './utils/parseJSON'
+import { governanceEngine } from '../governance/GovernanceEngine'
 import type { ProjectDNA } from '../../types'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -58,36 +60,6 @@ export type RefactorProgressEvent =
   | { type: 'error'; message: string }
 
 export type RefactorProgressCallback = (event: RefactorProgressEvent) => void
-
-// ─── JSON extraction — handles markdown-wrapped responses ─────────────────────
-
-function extractJSON(text: string): any | null {
-  // 1. Try direct parse
-  try { return JSON.parse(text.trim()) } catch {}
-
-  // 2. Strip markdown code fences and try again
-  const stripped = text
-    .replace(/^```(?:json)?\s*/im, '')
-    .replace(/\s*```\s*$/im, '')
-    .trim()
-  try { return JSON.parse(stripped) } catch {}
-
-  // 3. Find the outermost { } block
-  const start = text.indexOf('{')
-  const end = text.lastIndexOf('}')
-  if (start !== -1 && end !== -1 && end > start) {
-    try { return JSON.parse(text.slice(start, end + 1)) } catch {}
-  }
-
-  // 4. Find the outermost [ ] block (for arrays)
-  const aStart = text.indexOf('[')
-  const aEnd = text.lastIndexOf(']')
-  if (aStart !== -1 && aEnd !== -1 && aEnd > aStart) {
-    try { return JSON.parse(text.slice(aStart, aEnd + 1)) } catch {}
-  }
-
-  return null
-}
 
 // ─── Build the single-shot regeneration prompt ────────────────────────────────
 
@@ -191,7 +163,8 @@ export async function runAutoRefactor(
       options: { temperature: 0.2, maxTokens: 8000 }
     })
 
-    const parsed = extractJSON(response.result.content)
+    let parsed: any = null
+    try { parsed = parseJSONFromAI(response.result.content) } catch { parsed = null }
 
     if (!parsed || !Array.isArray(parsed.files) || parsed.files.length === 0) {
       // JSON parse failed — try to salvage by looking for file blocks in raw text
@@ -231,7 +204,43 @@ export async function runAutoRefactor(
       return emptyResult(resultId, start, blockers, pipelineResult)
     }
 
-    return buildResult(resultId, start, blockers, pipelineResult, fileChanges, parsed.explanation ?? 'Auto-fix complete', parsed.confidence ?? 80)
+    const result = buildResult(resultId, start, blockers, pipelineResult, fileChanges, parsed.explanation ?? 'Auto-fix complete', parsed.confidence ?? 80)
+
+    // Governance validation pass — static checks on the refactored output.
+    // This catches regressions (e.g. new hardcoded secrets, empty catches) without
+    // a full AI pipeline re-run. Cap at fast static analysis only.
+    if (dna && result.readyToApply) {
+      const regressions: Finding[] = []
+      for (const change of result.fileChanges) {
+        const after = change.after ?? ''
+        const lawViolations = governanceEngine.validateSystemLaws(after, dna)
+        const patternViolations = governanceEngine.detectForbiddenPatterns(after, dna)
+
+        for (const v of [...lawViolations, ...patternViolations]) {
+          regressions.push({
+            id: `regression-${v.pattern ?? v.description}-${Date.now()}`,
+            layer: 'validation',
+            severity: v.severity as Finding['severity'],
+            category: 'Regression',
+            message: v.description,
+            location: change.path,
+            autoFixable: false
+          })
+        }
+      }
+
+      if (regressions.length > 0) {
+        result.remainingBlockers = regressions
+        result.readyToApply = regressions.every(r => r.severity !== 'critical')
+        onProgress?.({ type: 'validating', findingId: 'regression-check', message: `Validation found ${regressions.length} regression${regressions.length !== 1 ? 's' : ''} in refactored output` })
+      }
+    }
+
+    blockers.forEach(b => {
+      onProgress?.({ type: 'fix_complete', findingId: b.id, success: result.readyToApply, explanation: result.fixes[0]?.explanation ?? 'Fix generated' })
+    })
+    onProgress?.({ type: 'done', result })
+    return result
 
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

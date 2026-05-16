@@ -14,6 +14,7 @@
 
 import type { Finding, LayerResult, PipelineContext, QualityScorecard } from '../../../types'
 import { orchestrator } from '../../providers/AIOrchestrator'
+import { parseJSONFromAI } from '../utils/parseJSON'
 
 export async function runSelfCritiqueLayer(
   context: PipelineContext,
@@ -34,7 +35,7 @@ export async function runSelfCritiqueLayer(
       role: 'architect',
       options: { temperature: 0.1 }
     })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = parseJSONFromAI(result.result.content)
 
     for (const f of parsed.findings ?? []) {
       // Skip complaints about missing implementation when code hasn't been generated yet
@@ -221,9 +222,4 @@ function defaultScorecard(hasCode: boolean): QualityScorecard {
     dnaConsistent: true,
     issues: []
   }
-}
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : '{}'
 }

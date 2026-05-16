@@ -47,12 +47,12 @@ export class AnthropicProvider extends BaseAIProvider {
     const model = options.model ?? 'claude-sonnet-4-6'
     const start = Date.now()
 
-    const response = await this.client.messages.create({
+    const response = await this.withRetry(() => this.client.messages.create({
       model,
       max_tokens: options.maxTokens ?? 4096,
       system: options.systemPrompt,
       messages: [{ role: 'user', content: prompt }]
-    })
+    }))
 
     const content = response.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
     return {

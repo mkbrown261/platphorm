@@ -15,6 +15,7 @@
 
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
+import { parseJSONFromAI } from '../utils/parseJSON'
 
 export async function runValidationLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -29,7 +30,7 @@ export async function runValidationLayer(context: PipelineContext): Promise<Laye
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'validation' })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = parseJSONFromAI(result.result.content)
 
     // In code mode: check for actual placeholder markers in real code
     if (hasExistingCode && parsed.hasPlaceholders) {
@@ -221,9 +222,4 @@ function isNoCodeComplaint(message: string): boolean {
   ]
   const lower = message.toLowerCase()
   return noCodePhrases.some(phrase => lower.includes(phrase))
-}
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : '{}'
 }

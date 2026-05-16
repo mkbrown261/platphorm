@@ -47,13 +47,13 @@ export class OpenAIProvider extends BaseAIProvider {
     const model = options.model ?? 'gpt-4o'
     const start = Date.now()
 
-    const response = await this.client.chat.completions.create({
+    const response = await this.withRetry(() => this.client.chat.completions.create({
       model,
       messages: this.buildMessages(prompt, options.systemPrompt) as any,
       temperature: options.temperature ?? 0.3,
       max_tokens: options.maxTokens ?? 4096,
       stream: false
-    })
+    }))
 
     const content = response.choices[0]?.message?.content ?? ''
     return {

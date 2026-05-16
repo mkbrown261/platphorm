@@ -11,16 +11,16 @@ export interface OpenRouterModel {
   top_provider?: { context_length?: number }
 }
 
-// Current best models on OpenRouter as of 2026-05
-// These are the actual OpenRouter model IDs — keep in sync with their catalog
+// Canonical role→model map. Single source of truth — also imported by AIOrchestrator.
+// OpenRouter model IDs: https://openrouter.ai/models
 export const DEFAULT_ROLE_MODELS: Record<ModelRole, string> = {
-  architect:    'anthropic/claude-opus-4-5',
-  security:     'anthropic/claude-opus-4-5',
-  backend:      'anthropic/claude-sonnet-4-5',
-  frontend:     'anthropic/claude-sonnet-4-5',
-  refactor:     'anthropic/claude-sonnet-4-5',
+  architect:    'anthropic/claude-opus-4-7',
+  security:     'anthropic/claude-opus-4-7',
+  backend:      'anthropic/claude-sonnet-4-6',
+  frontend:     'anthropic/claude-sonnet-4-6',
+  refactor:     'anthropic/claude-sonnet-4-6',
   performance:  'google/gemini-2.5-pro',
-  general:      'anthropic/claude-sonnet-4-5',
+  general:      'anthropic/claude-sonnet-4-6',
   validation:   'deepseek/deepseek-r1-0528',
   continuity:   'google/gemini-2.5-pro'
 }
@@ -41,9 +41,9 @@ export const ROLE_DESCRIPTIONS: Record<ModelRole, string> = {
 // These cover the most important providers so users can immediately pick a model
 export const FEATURED_MODELS: OpenRouterModel[] = [
   // Anthropic Claude
-  { id: 'anthropic/claude-opus-4-5',   name: 'Claude Opus 4.5',   context_length: 200000, pricing: { prompt: '0.000015', completion: '0.000075' } },
-  { id: 'anthropic/claude-sonnet-4-5', name: 'Claude Sonnet 4.5', context_length: 200000, pricing: { prompt: '0.000003', completion: '0.000015' } },
-  { id: 'anthropic/claude-haiku-3-5',  name: 'Claude Haiku 3.5',  context_length: 200000, pricing: { prompt: '0.0000008', completion: '0.000004' } },
+  { id: 'anthropic/claude-opus-4-7',   name: 'Claude Opus 4.7',   context_length: 200000, pricing: { prompt: '0.000015', completion: '0.000075' } },
+  { id: 'anthropic/claude-sonnet-4-6', name: 'Claude Sonnet 4.6', context_length: 200000, pricing: { prompt: '0.000003', completion: '0.000015' } },
+  { id: 'anthropic/claude-haiku-4-5',  name: 'Claude Haiku 4.5',  context_length: 200000, pricing: { prompt: '0.0000008', completion: '0.000004' } },
   // OpenAI
   { id: 'openai/gpt-4o',               name: 'GPT-4o',            context_length: 128000, pricing: { prompt: '0.0000025', completion: '0.00001' } },
   { id: 'openai/gpt-4o-mini',          name: 'GPT-4o mini',       context_length: 128000, pricing: { prompt: '0.00000015', completion: '0.0000006' } },

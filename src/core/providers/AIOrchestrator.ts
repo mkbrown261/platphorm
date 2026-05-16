@@ -14,18 +14,7 @@ import { AnthropicProvider } from './AnthropicProvider'
 import { OpenAIProvider } from './OpenAIProvider'
 import { OpenRouterProvider } from './OpenRouterProvider'
 import { buildUnifiedIdentity, type IdentityContext } from '../intelligence/UnifiedIdentity'
-
-const ROLE_MODEL_MAP: Record<ModelRole, string> = {
-  architect: 'anthropic/claude-opus-4',
-  security: 'anthropic/claude-opus-4',
-  backend: 'anthropic/claude-sonnet-4-5',
-  frontend: 'anthropic/claude-sonnet-4-5',
-  refactor: 'anthropic/claude-sonnet-4-5',
-  performance: 'google/gemini-2.5-pro',
-  general: 'anthropic/claude-sonnet-4-5',
-  validation: 'deepseek/deepseek-r1',
-  continuity: 'google/gemini-2.5-pro'
-}
+import { DEFAULT_ROLE_MODELS } from '../../store/modelStore'
 
 // Runtime role→model overrides (set by modelStore)
 let _roleModelOverrides: Partial<Record<ModelRole, string>> = {}
@@ -93,8 +82,8 @@ export class AIOrchestrator {
     if (_sessionModelOverride) return _sessionModelOverride
 
     if (provider === 'openrouter') {
-      // 2. User-configured role override wins over defaults
-      return _roleModelOverrides[role] ?? ROLE_MODEL_MAP[role] ?? ROLE_MODEL_MAP.general
+      // 2. User-configured role override wins over defaults (modelStore is single source of truth)
+      return _roleModelOverrides[role] ?? DEFAULT_ROLE_MODELS[role] ?? DEFAULT_ROLE_MODELS.general
     }
     if (provider === 'anthropic') {
       return role === 'architect' || role === 'security'

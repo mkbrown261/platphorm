@@ -16,6 +16,7 @@
 
 import type { ExecutionPlan, FileChange, Finding, LayerResult, PipelineContext } from '../../../types'
 import { orchestrator } from '../../providers/AIOrchestrator'
+import { parseJSONFromAI } from '../utils/parseJSON'
 
 export async function runExecutionLayer(
   context: PipelineContext,
@@ -53,7 +54,7 @@ export async function runExecutionLayer(
     })
 
     const content = result.result.content
-    const parsed = JSON.parse(extractJSON(content))
+    const parsed = parseJSONFromAI(content)
 
     // Validate that file changes have actual content, not just descriptions
     const changes: FileChange[] = (parsed.changes ?? []).map((c: any) => ({
@@ -168,20 +169,4 @@ Respond in JSON:
   "requiresApproval": false,
   "implementationNotes": "Brief summary of approach taken"
 }`
-}
-
-function extractJSON(text: string): string {
-  // Try to find the outermost JSON object
-  const match = text.match(/\{[\s\S]*\}/)
-  if (!match) return '{}'
-  // Handle cases where the JSON itself contains code with braces
-  try {
-    JSON.parse(match[0])
-    return match[0]
-  } catch {
-    // Try to find a JSON block that starts with {"changes"
-    const changesMatch = text.match(/\{"changes"[\s\S]*?\}(?=\s*$|\s*```)/m)
-    if (changesMatch) return changesMatch[0]
-    return match[0]
-  }
 }

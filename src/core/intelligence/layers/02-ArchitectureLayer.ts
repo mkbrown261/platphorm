@@ -1,5 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
+import { parseJSONFromAI } from '../utils/parseJSON'
 
 export async function runArchitectureLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -92,7 +93,7 @@ Respond ONLY with JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'architect' })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = parseJSONFromAI(result.result.content)
 
     for (const v of parsed.violations ?? []) {
       // In intent-only mode: cap severity — never block on absent code
@@ -151,9 +152,4 @@ function capSeverity(
   const maxIdx = order.indexOf(max)
   const idx = Math.min(rawIdx < 0 ? 0 : rawIdx, maxIdx)
   return order[idx] as 'low' | 'medium' | 'high' | 'critical'
-}
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : '{}'
 }

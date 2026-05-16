@@ -1,5 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext, SecurityFinding } from '../../../types'
+import { parseJSONFromAI } from '../utils/parseJSON'
 
 const SECURITY_PATTERNS = [
   { pattern: /hardcoded.*key|api[_-]?key\s*=\s*["'][^"']+["']/i, label: 'Hardcoded API key' },
@@ -120,7 +121,7 @@ Respond ONLY with JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'security' })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = parseJSONFromAI(result.result.content)
 
     for (const f of parsed.findings ?? []) {
       // Strip false positives about absent code
@@ -176,9 +177,4 @@ function capSeverity(
   const maxIdx = order.indexOf(max)
   const idx = Math.min(rawIdx < 0 ? 0 : rawIdx, maxIdx)
   return order[idx] as 'low' | 'medium' | 'high' | 'critical'
-}
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : '{}'
 }
