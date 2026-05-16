@@ -119,6 +119,36 @@ function getSummary(name: string, args: Record<string, any>, result: string, ok:
   }
 }
 
+function parseToolArgs(raw: string): Record<string, any> {
+  // Happy path — valid JSON
+  try { return JSON.parse(raw) } catch {}
+
+  // Recovery for truncated responses: extract simple string fields with regex,
+  // then try to salvage the content body (may be incomplete but better than nothing)
+  const result: Record<string, any> = {}
+
+  const pathMatch = raw.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*?)"/)
+  if (pathMatch) result.path = pathMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+
+  const patternMatch = raw.match(/"pattern"\s*:\s*"((?:[^"\\]|\\.)*?)"/)
+  if (patternMatch) result.pattern = patternMatch[1]
+
+  // Content can be huge — find opening quote then take everything to end of string
+  const ci = raw.indexOf('"content"')
+  if (ci !== -1) {
+    const colon = raw.indexOf(':', ci)
+    const openQuote = raw.indexOf('"', colon + 1)
+    if (openQuote !== -1) {
+      result.content = raw.slice(openQuote + 1)
+        .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+        .replace(/"\s*}\s*$/, '') // strip trailing `"}` if present
+    }
+  }
+
+  return result
+}
+
 function resolvePath(raw: unknown, projectRoot?: string): string {
   if (typeof raw !== 'string' || !raw.trim()) throw new Error('path argument must be a non-empty string')
   const p = raw.trim()
@@ -224,7 +254,7 @@ export async function* runAgent(
         messages,
         tools: TOOLS,
         tool_choice: 'auto',
-        max_tokens: 8192,
+        max_tokens: 32768,
         temperature: 0.2
       }) as any
     } catch (err) {
@@ -232,8 +262,14 @@ export async function* runAgent(
       return
     }
 
-    const msg = (response as any).choices?.[0]?.message
+    const choice = (response as any).choices?.[0]
+    const msg = choice?.message
     if (!msg) { yield { type: 'done' }; return }
+
+    // Warn if the response was cut off due to token limit
+    if (choice?.finish_reason === 'length') {
+      yield { type: 'thinking', text: '⚠ Response was truncated (token limit). Continuing...' }
+    }
 
     if (msg.content?.trim()) {
       yield { type: 'thinking', text: msg.content.trim() }
@@ -248,8 +284,7 @@ export async function* runAgent(
 
     for (const call of msg.tool_calls) {
       const name: string = call.function.name
-      let args: Record<string, any> = {}
-      try { args = JSON.parse(call.function.arguments) } catch { args = {} }
+      const args = parseToolArgs(call.function.arguments)
 
       const meta = TOOL_META[name] ?? { icon: '◈', label: name }
 
