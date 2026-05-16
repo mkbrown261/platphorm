@@ -49,7 +49,7 @@ export class OpenAIProvider extends BaseAIProvider {
 
     const response = await this.withRetry(() => this.client.chat.completions.create({
       model,
-      messages: this.buildMessages(prompt, options.systemPrompt) as any,
+      messages: this.buildMessages(prompt, options.systemPrompt, options.attachments) as any,
       temperature: options.temperature ?? 0.3,
       max_tokens: options.maxTokens ?? 4096,
       stream: false

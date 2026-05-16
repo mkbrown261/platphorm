@@ -21,10 +21,18 @@ type ActivityItem =
   | { kind: 'tool'; id: string; icon: string; label: string; detail: string; status: 'running' | 'done' | 'error'; summary?: string }
   | { kind: 'pipeline'; index: number; label: string; description: string; status: 'running' | 'done' | 'warned' | 'failed' }
 
+interface ImageAttachment {
+  dataUrl: string
+  base64: string
+  mimeType: string
+  name: string
+}
+
 interface Msg {
   id: string
   role: 'user' | 'assistant' | 'system'
   content?: string
+  images?: string[]
   activity?: ActivityItem[]
   score?: number
   approved?: boolean
@@ -180,8 +188,10 @@ export function AIPanel() {
   const [viewingResult, setViewingResult] = useState<PipelineResult | null>(null)
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [refactoringMsgId, setRefactoringMsgId] = useState<string | null>(null)
+  const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([])
   const bottomRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { settings, startPipeline, updateLayerProgress, completePipeline, pipelineRunning } = useAIStore()
   const { dna } = useDNAStore()
@@ -194,6 +204,24 @@ export function AIPanel() {
   useEffect(() => { setSessionModelOverride(sessionModel) }, [sessionModel])
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
+
+  const handleImageFiles = useCallback(async (files: FileList | File[]) => {
+    const incoming: ImageAttachment[] = []
+    for (const file of Array.from(files)) {
+      if (!file.type.startsWith('image/')) continue
+      const dataUrl = await new Promise<string>(res => {
+        const r = new FileReader()
+        r.onload = e => res(e.target?.result as string)
+        r.readAsDataURL(file)
+      })
+      incoming.push({ dataUrl, base64: dataUrl.split(',')[1], mimeType: file.type, name: file.name })
+    }
+    if (incoming.length) setAttachedImages(prev => [...prev, ...incoming])
+  }, [])
+
+  const removeImage = useCallback((idx: number) => {
+    setAttachedImages(prev => prev.filter((_, i) => i !== idx))
+  }, [])
 
   const newId = () => `m${Date.now()}${Math.random().toString(36).slice(2)}`
 
@@ -223,13 +251,37 @@ export function AIPanel() {
   const push = (m: Omit<Msg, 'id'>) =>
     setMsgs(p => [...p, { ...m, id: `m${Date.now()}${Math.random()}` }])
 
+  const withVision = async (prompt: string, images: ImageAttachment[]) => {
+    const msgId = newId()
+    setMsgs(p => [...p, { id: msgId, role: 'assistant', activity: [] }])
+    try {
+      const res = await orchestrator.orchestrate({
+        prompt: prompt || 'Analyze this image. If it shows a UI, code, or error — describe exactly what you see and what should be fixed or improved.',
+        role: 'general',
+        options: {
+          temperature: 0.3,
+          maxTokens: 4096,
+          attachments: images.map(i => ({ base64: i.base64, mimeType: i.mimeType }))
+        }
+      })
+      setMsgs(p => p.map(m => m.id === msgId ? { ...m, content: res.result.content, activity: undefined } : m))
+    } catch (err) {
+      setMsgs(p => p.map(m => m.id === msgId ? { ...m, content: `Error: ${String(err)}`, activity: undefined } : m))
+    }
+  }
+
   const send = useCallback(async () => {
     const text = input.trim()
-    if (!text || busy) return
+    const hasImages = attachedImages.length > 0
+    if (!text && !hasImages) return
+    if (busy) return
+
     setInput('')
+    const snapImages = [...attachedImages]
+    setAttachedImages([])
     setBusy(true)
 
-    const userMsg: Msg = { id: newId(), role: 'user', content: text }
+    const userMsg: Msg = { id: newId(), role: 'user', content: text || undefined, images: snapImages.map(i => i.dataUrl) }
     setMsgs(p => [...p, userMsg])
 
     if (!orchestrator.hasProviders()) {
@@ -239,16 +291,19 @@ export function AIPanel() {
     }
 
     const apiKey = settings.providers?.openrouter ?? ''
-
     if (!apiKey) {
-      setMsgs(p => [...p, { id: newId(), role: 'system', content: 'OpenRouter API key required for agent mode. Add it in Settings (⌘,).' }])
+      setMsgs(p => [...p, { id: newId(), role: 'system', content: 'OpenRouter API key required. Add it in Settings (⌘,).' }])
       setBusy(false)
       return
     }
 
-    activeProject ? await withPipeline(text, apiKey) : await withAgent(text, apiKey)
+    if (hasImages) {
+      await withVision(text, snapImages)
+    } else {
+      activeProject ? await withPipeline(text, apiKey) : await withAgent(text, apiKey)
+    }
     setBusy(false)
-  }, [input, busy, activeProject, dna, activeTab, settings])
+  }, [input, busy, attachedImages, activeProject, dna, activeTab, settings])
 
   const withAgent = async (prompt: string, apiKey: string) => {
     const msgId = newId()
@@ -576,8 +631,16 @@ export function AIPanel() {
             <div key={msg.id}>
               {msg.role === 'user' && (
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <div style={{ maxWidth: '88%', background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: '14px 14px 4px 14px', padding: '9px 13px', fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
-                    {msg.content}
+                  <div style={{ maxWidth: '90%', display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
+                    {msg.images?.map((src, i) => (
+                      <img key={i} src={src} alt="attachment"
+                        style={{ maxWidth: 220, maxHeight: 160, borderRadius: 10, border: '1px solid rgba(124,58,237,0.3)', objectFit: 'cover', display: 'block' }} />
+                    ))}
+                    {msg.content && (
+                      <div style={{ background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.25)', borderRadius: '14px 14px 4px 14px', padding: '9px 13px', fontSize: 13, color: 'rgba(255,255,255,0.85)', lineHeight: 1.5 }}>
+                        {msg.content}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -733,28 +796,76 @@ export function AIPanel() {
             </div>
           )}
 
-          <div style={{ position: 'relative', background: 'rgba(255,255,255,0.04)', border: `1px solid ${busy ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.09)'}`, borderRadius: 12, transition: 'border-color 0.2s' }}>
+          {/* Attached image thumbnails */}
+          {attachedImages.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+              {attachedImages.map((img, i) => (
+                <div key={i} style={{ position: 'relative', flexShrink: 0 }}>
+                  <img src={img.dataUrl} alt={img.name}
+                    style={{ width: 54, height: 54, objectFit: 'cover', borderRadius: 8, border: '1px solid rgba(124,58,237,0.35)', display: 'block' }} />
+                  <button onClick={() => removeImage(i)}
+                    style={{ position: 'absolute', top: -5, right: -5, width: 16, height: 16, borderRadius: '50%', background: 'rgba(239,68,68,0.9)', border: 'none', color: 'white', fontSize: 11, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, lineHeight: 1 }}>
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{ position: 'relative', background: 'rgba(255,255,255,0.04)', border: `1px solid ${busy ? 'rgba(124,58,237,0.3)' : attachedImages.length > 0 ? 'rgba(124,58,237,0.2)' : 'rgba(255,255,255,0.09)'}`, borderRadius: 12, transition: 'border-color 0.2s' }}>
             <textarea
               ref={taRef}
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send() } }}
               onFocus={() => setShowModelPicker(false)}
-              placeholder={activeProject ? 'Build anything — agent will create files...' : 'Ask PLATPHORM...'}
+              onPaste={e => {
+                const items = Array.from(e.clipboardData.items)
+                const imageItems = items.filter(it => it.type.startsWith('image/'))
+                if (imageItems.length) {
+                  e.preventDefault()
+                  handleImageFiles(imageItems.map(it => it.getAsFile()!).filter(Boolean) as File[])
+                }
+              }}
+              onDragOver={e => e.preventDefault()}
+              onDrop={e => { e.preventDefault(); if (e.dataTransfer.files.length) handleImageFiles(e.dataTransfer.files) }}
+              placeholder={attachedImages.length > 0 ? 'Describe the issue or ask a question...' : activeProject ? 'Build anything — agent will create files...' : 'Ask PLATPHORM...'}
               rows={3}
               style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', padding: '11px 13px 34px', fontSize: 13, color: 'rgba(255,255,255,0.8)', resize: 'none', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 }}
             />
-            <div style={{ position: 'absolute', bottom: 8, left: 12, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>⌘↵</span>
+            <div style={{ position: 'absolute', bottom: 8, left: 10, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>⌘↵</span>
+                {/* Image attach button */}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Attach image (or paste / drag-drop)"
+                  style={{
+                    width: 22, height: 22, borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)',
+                    background: attachedImages.length > 0 ? 'rgba(124,58,237,0.15)' : 'transparent',
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: attachedImages.length > 0 ? '#a78bfa' : 'rgba(255,255,255,0.2)',
+                    transition: 'all 0.15s', padding: 0
+                  }}
+                  onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#a78bfa'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(124,58,237,0.3)' }}
+                  onMouseLeave={e => {
+                    if (!attachedImages.length) { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.2)'; (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.08)' }
+                  }}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                </button>
+                <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
+                  onChange={e => { if (e.target.files) { handleImageFiles(e.target.files); e.target.value = '' } }} />
+              </div>
               <button
                 onClick={send}
-                disabled={!input.trim() || busy}
+                disabled={(!input.trim() && !attachedImages.length) || busy}
                 style={{
                   width: 28, height: 28, borderRadius: 8, border: 'none', flexShrink: 0,
-                  background: input.trim() && !busy ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'rgba(255,255,255,0.06)',
-                  cursor: input.trim() && !busy ? 'pointer' : 'not-allowed',
+                  background: (input.trim() || attachedImages.length) && !busy ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'rgba(255,255,255,0.06)',
+                  cursor: (input.trim() || attachedImages.length) && !busy ? 'pointer' : 'not-allowed',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  boxShadow: input.trim() && !busy ? '0 0 14px rgba(124,58,237,0.4)' : 'none',
+                  boxShadow: (input.trim() || attachedImages.length) && !busy ? '0 0 14px rgba(124,58,237,0.4)' : 'none',
                   transition: 'all 0.2s'
                 }}
               >

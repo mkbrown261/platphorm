@@ -1,4 +1,4 @@
-import type { AIProviderInterface, GenerationOptions, GenerationResult, ModelConfig, StreamChunk } from '../../../types'
+import type { AIProviderInterface, GenerationOptions, GenerationResult, ModelConfig, StreamChunk, ImageAttachment } from '../../../types'
 
 export abstract class BaseAIProvider implements AIProviderInterface {
   protected apiKey: string
@@ -14,10 +14,22 @@ export abstract class BaseAIProvider implements AIProviderInterface {
   abstract isAvailable(): Promise<boolean>
   abstract listModels(): Promise<ModelConfig[]>
 
-  protected buildMessages(prompt: string, systemPrompt?: string) {
-    const messages: Array<{ role: string; content: string }> = []
+  protected buildMessages(prompt: string, systemPrompt?: string, attachments?: ImageAttachment[]) {
+    const messages: Array<{ role: string; content: string | any[] }> = []
     if (systemPrompt) messages.push({ role: 'system', content: systemPrompt })
-    messages.push({ role: 'user', content: prompt })
+
+    if (attachments?.length) {
+      // OpenAI / OpenRouter vision format
+      const content: any[] = attachments.map(img => ({
+        type: 'image_url',
+        image_url: { url: `data:${img.mimeType};base64,${img.base64}`, detail: 'high' }
+      }))
+      content.push({ type: 'text', text: prompt })
+      messages.push({ role: 'user', content })
+    } else {
+      messages.push({ role: 'user', content: prompt })
+    }
+
     return messages
   }
 
