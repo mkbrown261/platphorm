@@ -5,12 +5,8 @@ import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
 
-// Track the main window and all preview windows separately
-let mainWindow: BrowserWindow | null = null
-const previewWindows = new Set<BrowserWindow>()
-
 function createWindow(): void {
-  mainWindow = new BrowserWindow({
+  const mainWindow = new BrowserWindow({
     width: 1600,
     height: 1000,
     minWidth: 1200,
@@ -26,11 +22,8 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow!.show()
-    mainWindow!.focus()
+    mainWindow.show()
   })
-
-  mainWindow.on('closed', () => { mainWindow = null })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -44,26 +37,8 @@ function createWindow(): void {
   }
 }
 
-// Close all preview windows and bring the main window to focus
-function focusMain(): void {
-  previewWindows.forEach(w => { if (!w.isDestroyed()) w.close() })
-  previewWindows.clear()
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.focus()
-  } else {
-    createWindow()
-  }
-}
-
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.platphorm.app')
-
-  // Prevent macOS from restoring preview windows across sessions
-  app.on('before-quit', () => {
-    previewWindows.forEach(w => { if (!w.isDestroyed()) w.destroy() })
-    previewWindows.clear()
-  })
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
@@ -73,8 +48,7 @@ app.whenReady().then(() => {
   createWindow()
 
   app.on('activate', () => {
-    // Always bring the main PLATPHORM window to front on activate — never a preview
-    focusMain()
+    if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
@@ -208,20 +182,16 @@ function registerIpcHandlers(): void {
         height: 780,
         title: title || 'PLATPHORM Preview',
         backgroundColor: '#ffffff',
-        // Don't allow macOS to restore this window across sessions
-        tabbingIdentifier: 'platphorm-preview',
         webPreferences: {
           sandbox: true,
           contextIsolation: true,
           javascript: true,
+          // Allow preview to load local resources
           webSecurity: false,
         }
       })
 
-      previewWindows.add(previewWindow)
-      previewWindow.on('closed', () => previewWindows.delete(previewWindow))
-
-      // Load via data URL — content lives only in memory, can't be restored by macOS
+      // Load the HTML content via data URL
       const dataUrl = `data:text/html;charset=utf-8,${encodeURIComponent(content)}`
       await previewWindow.loadURL(dataUrl)
       return { success: true }
