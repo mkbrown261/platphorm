@@ -1,23 +1,111 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { useProjectStore } from '../../store/projectStore'
 import { useAIStore } from '../../store/aiStore'
 import { MonacoEditor } from './MonacoEditor'
+import { PreviewPanel } from '../preview/PreviewPanel'
+import type { PreviewContent } from '../preview/PreviewPanel'
 
 const EXT_COLOR: Record<string, string> = {
   ts:'#3b82f6', tsx:'#3b82f6', js:'#eab308', jsx:'#60a5fa',
   css:'#a855f7', json:'#f59e0b', md:'#64748b', py:'#22c55e',
+  html:'#f97316', htm:'#f97316',
 }
+
+// Extensions that can be previewed inline
+const PREVIEWABLE_EXTS = new Set(['html', 'htm', 'md', 'css', 'js', 'jsx', 'ts', 'tsx'])
+const SPLIT_PREVIEW_EXTS = new Set(['html', 'htm', 'md', 'css'])
+
+// Preview eye icon SVG
+const EyeIcon = () => (
+  <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+    <circle cx="12" cy="12" r="3"/>
+  </svg>
+)
+
+// Popout icon
+const PopoutIcon = () => (
+  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/>
+    <polyline points="15 3 21 3 21 9"/>
+    <line x1="10" y1="14" x2="21" y2="3"/>
+  </svg>
+)
 
 export function EditorArea() {
   const { openTabs, activeTabId, closeTab, setActiveTab, markTabClean } = useProjectStore()
   const { settings } = useAIStore()
   const activeTab = openTabs.find(t => t.id === activeTabId)
+  const [showPreview, setShowPreview] = useState(false)
+  const [popoutLoading, setPopoutLoading] = useState(false)
 
   const handleSave = useCallback(async () => {
     if (!activeTab) return
     await window.api.fs.writeFile(activeTab.filePath, activeTab.content)
     markTabClean(activeTab.id)
   }, [activeTab, markTabClean])
+
+  // Determine if active tab is previewable
+  const activeExt = activeTab?.filePath.split('.').pop()?.toLowerCase() ?? ''
+  const canSplitPreview = SPLIT_PREVIEW_EXTS.has(activeExt)
+  const canPopoutPreview = PREVIEWABLE_EXTS.has(activeExt)
+
+  // Build preview content from the active tab
+  const buildPreviewContent = useCallback((): PreviewContent => {
+    if (!activeTab) return {}
+    const ext = activeExt
+    if (ext === 'html' || ext === 'htm') {
+      return {
+        raw: activeTab.content,
+        title: activeTab.filePath.split('/').pop(),
+      }
+    }
+    if (ext === 'md') {
+      return {
+        raw: activeTab.content,
+        language: 'markdown',
+        title: activeTab.filePath.split('/').pop(),
+      }
+    }
+    if (ext === 'css') {
+      return {
+        css: activeTab.content,
+        html: `<div style="padding:20px;font-family:monospace;font-size:12px;color:#555">
+          <p>CSS Preview — add HTML to see styled output.</p>
+          <div class="preview-sample">Sample element</div>
+        </div>`,
+        title: activeTab.filePath.split('/').pop(),
+      }
+    }
+    // Code preview with syntax highlighting
+    return {
+      raw: activeTab.content,
+      language: ext,
+      title: activeTab.filePath.split('/').pop(),
+    }
+  }, [activeTab, activeExt])
+
+  // Popout: open in separate Electron window
+  const handlePopout = useCallback(async () => {
+    if (!activeTab) return
+    setPopoutLoading(true)
+    try {
+      const content = buildPreviewContent()
+      let doc: string
+      if (content.raw && (content.raw.trimStart().startsWith('<!DOCTYPE') || content.raw.trimStart().startsWith('<html'))) {
+        doc = content.raw
+      } else if (content.language === 'markdown') {
+        // Use the file path to let the preview system build it
+        doc = activeTab.content
+      } else {
+        doc = activeTab.content
+      }
+      await (window as any).api?.preview?.open(doc, content.title ?? 'Preview')
+    } catch (e) {
+      console.error('Popout failed:', e)
+    }
+    setPopoutLoading(false)
+  }, [activeTab, buildPreviewContent])
 
   if (openTabs.length === 0) return <Welcome />
 
@@ -63,20 +151,97 @@ export function EditorArea() {
             </div>
           )
         })}
+
+        {/* Preview controls — only show for previewable active file */}
+        {activeTab && canPopoutPreview && (
+          <div style={{
+            marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 4,
+            padding: '0 10px', flexShrink: 0
+          }}>
+            {/* Split preview toggle (HTML/MD/CSS only) */}
+            {canSplitPreview && (
+              <button
+                onClick={() => setShowPreview(v => !v)}
+                title={showPreview ? 'Close preview' : 'Open preview panel'}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 5,
+                  padding: '3px 10px', height: 24,
+                  fontSize: 10, fontFamily: 'monospace',
+                  color: showPreview ? '#a78bfa' : 'rgba(255,255,255,0.4)',
+                  background: showPreview ? 'rgba(124,58,237,0.15)' : 'rgba(255,255,255,0.04)',
+                  border: `1px solid ${showPreview ? 'rgba(124,58,237,0.4)' : 'rgba(255,255,255,0.1)'}`,
+                  borderRadius: 5, cursor: 'pointer', transition: 'all 0.15s',
+                  whiteSpace: 'nowrap',
+                }}
+                onMouseEnter={e => { if (!showPreview) (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.7)' }}
+                onMouseLeave={e => { if (!showPreview) (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.4)' }}
+              >
+                <EyeIcon />
+                {showPreview ? 'Hide Preview' : 'Preview'}
+              </button>
+            )}
+
+            {/* Popout button */}
+            <button
+              onClick={handlePopout}
+              disabled={popoutLoading}
+              title="Open preview in new window"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '3px 10px', height: 24,
+                fontSize: 10, fontFamily: 'monospace',
+                color: 'rgba(255,255,255,0.4)',
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.1)',
+                borderRadius: 5, cursor: popoutLoading ? 'wait' : 'pointer',
+                transition: 'all 0.15s', whiteSpace: 'nowrap',
+              }}
+              onMouseEnter={e => (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.7)'}
+              onMouseLeave={e => (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.4)'}
+            >
+              {popoutLoading
+                ? <div style={{ width: 8, height: 8, border: '1.5px solid rgba(255,255,255,0.2)', borderTopColor: '#a78bfa', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                : <PopoutIcon />
+              }
+              Pop out
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Editor */}
-      <div style={{ flex: 1, overflow: 'hidden' }} onKeyDown={e => { if ((e.metaKey||e.ctrlKey) && e.key==='s') { e.preventDefault(); handleSave() } }}>
-        {activeTab && (
-          <MonacoEditor
-            key={activeTab.id}
-            tabId={activeTab.id}
-            filePath={activeTab.filePath}
-            content={activeTab.content}
-            language={activeTab.language}
-            fontSize={settings.fontSize}
-            fontFamily={settings.fontFamily}
-          />
+      {/* Editor + Preview split */}
+      <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}
+        onKeyDown={e => { if ((e.metaKey||e.ctrlKey) && e.key==='s') { e.preventDefault(); handleSave() } }}
+      >
+        {/* Monaco Editor */}
+        <div style={{ flex: showPreview ? '0 0 50%' : '1 1 100%', overflow: 'hidden', transition: 'flex 0.2s ease' }}>
+          {activeTab && (
+            <MonacoEditor
+              key={activeTab.id}
+              tabId={activeTab.id}
+              filePath={activeTab.filePath}
+              content={activeTab.content}
+              language={activeTab.language}
+              fontSize={settings.fontSize}
+              fontFamily={settings.fontFamily}
+            />
+          )}
+        </div>
+
+        {/* Preview Panel — shown when split preview is active */}
+        {showPreview && canSplitPreview && activeTab && (
+          <div style={{
+            flex: '0 0 50%', overflow: 'hidden',
+            borderLeft: '1px solid rgba(255,255,255,0.07)',
+            display: 'flex', flexDirection: 'column'
+          }}>
+            <PreviewPanel
+              key={activeTab.id + activeTab.content.length}
+              content={buildPreviewContent()}
+              onClose={() => setShowPreview(false)}
+              embedded={true}
+            />
+          </div>
         )}
       </div>
     </div>

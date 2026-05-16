@@ -28,6 +28,11 @@ export interface ProviderConfig {
   defaultModel?: string
 }
 
+export interface ImageAttachment {
+  base64: string
+  mimeType: string
+}
+
 export interface GenerationOptions {
   model?: string
   temperature?: number
@@ -35,6 +40,7 @@ export interface GenerationOptions {
   stream?: boolean
   systemPrompt?: string
   role?: ModelRole
+  attachments?: ImageAttachment[]
 }
 
 export interface GenerationResult {

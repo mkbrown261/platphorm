@@ -13,17 +13,31 @@ import type {
 import { AnthropicProvider } from './AnthropicProvider'
 import { OpenAIProvider } from './OpenAIProvider'
 import { OpenRouterProvider } from './OpenRouterProvider'
+import { buildUnifiedIdentity, type IdentityContext } from '../intelligence/UnifiedIdentity'
+import { DEFAULT_ROLE_MODELS } from '../../store/modelStore'
 
-const ROLE_MODEL_MAP: Record<ModelRole, string> = {
-  architect: 'anthropic/claude-opus-4',
-  security: 'anthropic/claude-opus-4',
-  backend: 'anthropic/claude-sonnet-4-5',
-  frontend: 'anthropic/claude-sonnet-4-5',
-  refactor: 'anthropic/claude-sonnet-4-5',
-  performance: 'google/gemini-2.5-pro',
-  general: 'anthropic/claude-sonnet-4-5',
-  validation: 'deepseek/deepseek-r1',
-  continuity: 'google/gemini-2.5-pro'
+// Runtime role→model overrides (set by modelStore)
+let _roleModelOverrides: Partial<Record<ModelRole, string>> = {}
+let _sessionModelOverride: string | null = null
+
+// Unified AI Identity context — set once when DNA loads, used in every call
+let _identityContext: IdentityContext = {}
+
+export function setRoleModelOverrides(overrides: Partial<Record<ModelRole, string>>) {
+  _roleModelOverrides = overrides
+}
+
+export function setSessionModelOverride(model: string | null) {
+  _sessionModelOverride = model
+}
+
+/**
+ * Sets the global identity context used to build the UnifiedIdentity system prompt.
+ * Call this whenever DNA loads or the architecture doc changes.
+ * Every subsequent orchestrate() and streamOrchestrate() call will use this context.
+ */
+export function setIdentityContext(context: IdentityContext) {
+  _identityContext = context
 }
 
 export class AIOrchestrator {
@@ -64,8 +78,12 @@ export class AIOrchestrator {
   }
 
   private selectModel(role: ModelRole, provider: ModelProvider): string {
+    // 1. Session override wins (user picked a specific model for this conversation)
+    if (_sessionModelOverride) return _sessionModelOverride
+
     if (provider === 'openrouter') {
-      return ROLE_MODEL_MAP[role] ?? ROLE_MODEL_MAP.general
+      // 2. User-configured role override wins over defaults (modelStore is single source of truth)
+      return _roleModelOverrides[role] ?? DEFAULT_ROLE_MODELS[role] ?? DEFAULT_ROLE_MODELS.general
     }
     if (provider === 'anthropic') {
       return role === 'architect' || role === 'security'
@@ -86,6 +104,15 @@ export class AIOrchestrator {
     const role = request.role ?? 'general'
     let fallbackUsed = false
 
+    // Build the Unified AI Identity and inject as system prompt.
+    // If the request already has a system prompt, prepend the identity to it.
+    // This ensures every AI call is architecturally aware — no exceptions.
+    const unifiedIdentity = buildUnifiedIdentity(_identityContext)
+    const baseSystemPrompt = request.options?.systemPrompt
+    const systemPrompt = baseSystemPrompt
+      ? `${unifiedIdentity}\n\n---\n\n${baseSystemPrompt}`
+      : unifiedIdentity
+
     const order = [
       this.preferredProvider,
       ...this.fallbackOrder.filter((p) => p !== this.preferredProvider)
@@ -100,7 +127,8 @@ export class AIOrchestrator {
         const options: GenerationOptions = {
           ...(request.options ?? {}),
           model,
-          role
+          role,
+          systemPrompt
         }
 
         const result = await provider.generate(request.prompt, options)
@@ -125,6 +153,13 @@ export class AIOrchestrator {
   ): AsyncGenerator<StreamChunk & { provider: ModelProvider; model: string }> {
     const role = request.role ?? 'general'
 
+    // Inject Unified AI Identity into every streaming call as well
+    const unifiedIdentity = buildUnifiedIdentity(_identityContext)
+    const baseSystemPrompt = request.options?.systemPrompt
+    const systemPrompt = baseSystemPrompt
+      ? `${unifiedIdentity}\n\n---\n\n${baseSystemPrompt}`
+      : unifiedIdentity
+
     const order = [
       this.preferredProvider,
       ...this.fallbackOrder.filter((p) => p !== this.preferredProvider)
@@ -136,7 +171,7 @@ export class AIOrchestrator {
 
       try {
         const model = this.selectModel(role, providerName)
-        const options: GenerationOptions = { ...(request.options ?? {}), model, role }
+        const options: GenerationOptions = { ...(request.options ?? {}), model, role, systemPrompt }
 
         for await (const chunk of provider.stream(request.prompt, options)) {
           yield { ...chunk, provider: providerName, model }

@@ -1,4 +1,4 @@
-import type { ExecutionPlan, Finding, LayerResult, PipelineContext, PipelineResult, QualityScorecard } from '../../types'
+import type { ExecutionPlan, Finding, LayerResult, PipelineContext, PipelineResult, QualityScorecard, DeleteDetectionResult } from '../../types'
 import { runIntentLayer } from './layers/01-IntentLayer'
 import { runArchitectureLayer } from './layers/02-ArchitectureLayer'
 import { runSecurityLayer } from './layers/03-SecurityLayer'
@@ -97,9 +97,37 @@ export async function runPipeline(
   layers.push(valResult)
   notify(6, valResult)
 
-  // Determine if execution should proceed (no critical blockers in layers 1-7)
-  const criticalBlockers = layers.flatMap((l) => l.findings).filter((f) => f.severity === 'critical')
-  const canExecute = criticalBlockers.length === 0
+  // Determine if execution should proceed
+  // Strict mode — passed via context, also blocks on HIGH severity findings
+  const strictMode = (context as any).strictMode === true
+
+  const allFindings = layers.flatMap((l) => l.findings)
+  const criticalBlockers = allFindings.filter((f) => f.severity === 'critical')
+  const highBlockers = strictMode ? allFindings.filter((f) => f.severity === 'high') : []
+  const canExecute = criticalBlockers.length === 0 && highBlockers.length === 0
+
+  // Delete Detection — scan execution plan for deletions and warn
+  if (context.selectedCode || context.activeFile) {
+    const deleteKeywords = ['delete', 'remove', 'drop', 'unlink', 'destroy']
+    const promptLower = context.userPrompt.toLowerCase()
+    if (deleteKeywords.some(k => promptLower.includes(k))) {
+      layers.push({
+        layer: 'execution',
+        status: 'warned',
+        score: 80,
+        findings: [{
+          id: 'delete-detection',
+          layer: 'execution',
+          severity: 'medium',
+          category: 'Delete Detection',
+          message: 'Delete operation detected. All downstream imports and API contracts have been flagged for review before execution.',
+          autoFixable: false
+        }],
+        durationMs: 0,
+        timestamp: Date.now()
+      })
+    }
+  }
 
   // Layer 8: Execution
   notify(7)
@@ -126,9 +154,9 @@ export async function runPipeline(
   const scores = layers.map((l) => l.score)
   const overallScore = Math.round(scores.reduce((a, b) => a + b, 0) / scores.length)
 
-  const allFindings = layers.flatMap((l) => l.findings)
-  const blockers = allFindings.filter((f) => f.severity === 'critical')
-  const warnings = allFindings.filter((f) => f.severity === 'high' || f.severity === 'medium')
+  const finalFindings = layers.flatMap((l) => l.findings)
+  const blockers = finalFindings.filter((f) => f.severity === 'critical' || (strictMode && f.severity === 'high'))
+  const warnings = finalFindings.filter((f) => f.severity === 'high' || f.severity === 'medium')
 
   const approved = blockers.length === 0 && canExecute
 

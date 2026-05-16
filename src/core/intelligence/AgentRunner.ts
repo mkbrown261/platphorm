@@ -4,7 +4,7 @@ import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/reso
 export type AgentEvent =
   | { type: 'thinking'; text: string }
   | { type: 'tool_start'; id: string; tool: string; icon: string; label: string; detail: string }
-  | { type: 'tool_done'; id: string; summary: string; success: boolean }
+  | { type: 'tool_done'; id: string; tool: string; summary: string; success: boolean }
   | { type: 'done' }
   | { type: 'error'; message: string }
 
@@ -119,29 +119,69 @@ function getSummary(name: string, args: Record<string, any>, result: string, ok:
   }
 }
 
-async function executeTool(name: string, args: Record<string, any>): Promise<string> {
+function parseToolArgs(raw: string): Record<string, any> {
+  // Happy path — valid JSON
+  try { return JSON.parse(raw) } catch {}
+
+  // Recovery for truncated responses: extract simple string fields with regex,
+  // then try to salvage the content body (may be incomplete but better than nothing)
+  const result: Record<string, any> = {}
+
+  const pathMatch = raw.match(/"path"\s*:\s*"((?:[^"\\]|\\.)*?)"/)
+  if (pathMatch) result.path = pathMatch[1].replace(/\\n/g, '\n').replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+
+  const patternMatch = raw.match(/"pattern"\s*:\s*"((?:[^"\\]|\\.)*?)"/)
+  if (patternMatch) result.pattern = patternMatch[1]
+
+  // Content can be huge — find opening quote then take everything to end of string
+  const ci = raw.indexOf('"content"')
+  if (ci !== -1) {
+    const colon = raw.indexOf(':', ci)
+    const openQuote = raw.indexOf('"', colon + 1)
+    if (openQuote !== -1) {
+      result.content = raw.slice(openQuote + 1)
+        .replace(/\\n/g, '\n').replace(/\\r/g, '\r').replace(/\\t/g, '\t')
+        .replace(/\\"/g, '"').replace(/\\\\/g, '\\')
+        .replace(/"\s*}\s*$/, '') // strip trailing `"}` if present
+    }
+  }
+
+  return result
+}
+
+function resolvePath(raw: unknown, projectRoot?: string): string {
+  if (typeof raw !== 'string' || !raw.trim()) throw new Error('path argument must be a non-empty string')
+  const p = raw.trim()
+  if (p.startsWith('/')) return p
+  if (!projectRoot) throw new Error(`relative path "${p}" requires a project root — open a project first`)
+  return `${projectRoot.replace(/\/$/, '')}/${p}`
+}
+
+async function executeTool(name: string, args: Record<string, any>, projectRoot?: string): Promise<string> {
   switch (name) {
     case 'read_file': {
-      const c = await window.api.fs.readFile(args.path)
+      const c = await window.api.fs.readFile(resolvePath(args.path, projectRoot))
       return c ?? '(empty or not found)'
     }
     case 'write_file': {
-      const r = await window.api.fs.writeFile(args.path, args.content)
+      const p = resolvePath(args.path, projectRoot)
+      if (typeof args.content !== 'string') throw new Error('write_file requires a content string')
+      const r = await window.api.fs.writeFile(p, args.content)
       if (!r.success) throw new Error(r.error ?? 'write failed')
-      return `Written: ${args.path}`
+      return `Written: ${p}`
     }
     case 'list_directory': {
-      const entries = await window.api.fs.readDir(args.path)
+      const entries = await window.api.fs.readDir(resolvePath(args.path, projectRoot))
       if (!entries.length) return '(empty)'
       return entries.map(e => `${e.isDirectory ? '[dir]' : '[file]'} ${e.name}`).join('\n')
     }
     case 'create_directory': {
-      const r = await window.api.fs.mkdir(args.path)
+      const r = await window.api.fs.mkdir(resolvePath(args.path, projectRoot))
       if (!r.success) throw new Error(r.error ?? 'mkdir failed')
       return `Created: ${args.path}`
     }
     case 'search_in_file': {
-      const c = await window.api.fs.readFile(args.path)
+      const c = await window.api.fs.readFile(resolvePath(args.path, projectRoot))
       if (!c) return '(file not found)'
       const hits = c.split('\n').filter(l => l.includes(args.pattern)).slice(0, 15)
       return hits.length ? hits.join('\n') : '(no matches)'
@@ -191,7 +231,8 @@ export function buildAgentSystemPrompt(opts: {
 export async function* runAgent(
   prompt: string,
   systemPrompt: string,
-  apiKey: string
+  apiKey: string,
+  projectRoot?: string
 ): AsyncGenerator<AgentEvent> {
   const client = new OpenAI({
     apiKey,
@@ -213,7 +254,7 @@ export async function* runAgent(
         messages,
         tools: TOOLS,
         tool_choice: 'auto',
-        max_tokens: 8192,
+        max_tokens: 32768,
         temperature: 0.2
       }) as any
     } catch (err) {
@@ -221,8 +262,14 @@ export async function* runAgent(
       return
     }
 
-    const msg = (response as any).choices?.[0]?.message
+    const choice = (response as any).choices?.[0]
+    const msg = choice?.message
     if (!msg) { yield { type: 'done' }; return }
+
+    // Warn if the response was cut off due to token limit
+    if (choice?.finish_reason === 'length') {
+      yield { type: 'thinking', text: '⚠ Response was truncated (token limit). Continuing...' }
+    }
 
     if (msg.content?.trim()) {
       yield { type: 'thinking', text: msg.content.trim() }
@@ -237,8 +284,7 @@ export async function* runAgent(
 
     for (const call of msg.tool_calls) {
       const name: string = call.function.name
-      let args: Record<string, any> = {}
-      try { args = JSON.parse(call.function.arguments) } catch { args = {} }
+      const args = parseToolArgs(call.function.arguments)
 
       const meta = TOOL_META[name] ?? { icon: '◈', label: name }
 
@@ -254,13 +300,13 @@ export async function* runAgent(
       let result: string
       let ok = true
       try {
-        result = await executeTool(name, args)
+        result = await executeTool(name, args, projectRoot)
       } catch (err) {
         result = String(err)
         ok = false
       }
 
-      yield { type: 'tool_done', id: call.id, summary: getSummary(name, args, result, ok), success: ok }
+      yield { type: 'tool_done', id: call.id, tool: name, summary: getSummary(name, args, result, ok), success: ok }
 
       messages.push({ role: 'tool', tool_call_id: call.id, content: result })
     }

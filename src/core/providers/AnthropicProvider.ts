@@ -47,12 +47,22 @@ export class AnthropicProvider extends BaseAIProvider {
     const model = options.model ?? 'claude-sonnet-4-6'
     const start = Date.now()
 
-    const response = await this.client.messages.create({
+    const userContent: any = options.attachments?.length
+      ? [
+          ...options.attachments.map(img => ({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mimeType, data: img.base64 }
+          })),
+          { type: 'text', text: prompt }
+        ]
+      : prompt
+
+    const response = await this.withRetry(() => this.client.messages.create({
       model,
       max_tokens: options.maxTokens ?? 4096,
       system: options.systemPrompt,
-      messages: [{ role: 'user', content: prompt }]
-    })
+      messages: [{ role: 'user', content: userContent }]
+    }))
 
     const content = response.content.map((c) => (c.type === 'text' ? c.text : '')).join('')
     return {

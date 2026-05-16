@@ -28,11 +28,25 @@ const ICON_SETTINGS = (
   </svg>
 )
 
+const ICON_GOVERNANCE = (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+  </svg>
+)
+
+const ICON_SPRINT = (
+  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+  </svg>
+)
+
 const TOP = [
-  { id: 'files',  icon: ICON_FILES,    label: 'Explorer' },
-  { id: 'search', icon: ICON_SEARCH,   label: 'Search' },
-  { id: 'git',    icon: ICON_GIT,      label: 'Source Control' },
-  { id: 'dna',    icon: ICON_DNA,      label: 'Project DNA' }
+  { id: 'files',      icon: ICON_FILES,       label: 'Explorer' },
+  { id: 'search',     icon: ICON_SEARCH,      label: 'Search' },
+  { id: 'git',        icon: ICON_GIT,         label: 'Source Control' },
+  { id: 'dna',        icon: ICON_DNA,         label: 'Project DNA' },
+  { id: 'governance', icon: ICON_GOVERNANCE,  label: 'Governance' },
+  { id: 'sprint',     icon: ICON_SPRINT,      label: 'Sprint (Multi-Agent)' }
 ]
 
 interface Props { active: string; onChange: (id: string) => void }
