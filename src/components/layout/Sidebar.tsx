@@ -24,7 +24,6 @@ const LANG: Record<string, string> = {
   py:'python', rs:'rust', go:'go', css:'css', json:'json',
   md:'markdown', html:'html', sh:'shell', yaml:'yaml', yml:'yaml'
 }
-const SKIP = new Set(['node_modules','.git','dist','out','.next','__pycache__','.DS_Store'])
 
 function FileIcon({ name }: { name: string }) {
   const ext = name.split('.').pop() ?? ''
@@ -90,20 +89,19 @@ function FileNode({ entry, depth = 0 }: { entry: FileEntry; depth?: number }) {
 }
 
 export function Sidebar({ panel }: { panel: string }) {
-  const { activeProject, fileTree, setProject, setFileTree } = useProjectStore()
+  const { activeProject, fileTree, setProject, refreshFileTree } = useProjectStore()
   const { setDNA, setInitializing, setInitialized, setInitError } = useDNAStore()
   const [showPicker, setShowPicker] = useState(false)
 
   const openProject = useCallback(async (path: string) => {
     setShowPicker(false)
     setProject({ id: `p-${Date.now()}`, name: path.split('/').pop() ?? 'Project', rootPath: path, createdAt: Date.now(), lastOpenedAt: Date.now(), hasDNA: false })
-    const tree = await buildTree(path)
-    setFileTree(tree)
+    await refreshFileTree()
     setInitializing(true)
     try { const d = await dnaEngine.initialize(path); setDNA(d); setInitialized(true) }
     catch (e) { setInitError(String(e)) }
     finally { setInitializing(false) }
-  }, [setProject, setFileTree, setDNA, setInitializing, setInitialized, setInitError])
+  }, [setProject, refreshFileTree, setDNA, setInitializing, setInitialized, setInitError])
 
   const openFolder = useCallback(() => setShowPicker(true), [])
 
@@ -154,17 +152,3 @@ export function Sidebar({ panel }: { panel: string }) {
 
 
 
-async function buildTree(dir: string, depth = 0): Promise<FileEntry[]> {
-  if (depth > 3) return []
-  try {
-    const entries = await window.api.fs.readDir(dir)
-    const result: FileEntry[] = []
-    for (const e of entries) {
-      if (SKIP.has(e.name) || e.name.startsWith('.')) continue
-      const node: FileEntry = { name: e.name, path: e.path, isDirectory: e.isDirectory }
-      if (e.isDirectory && depth < 3) node.children = await buildTree(e.path, depth + 1)
-      result.push(node)
-    }
-    return result.sort((a, b) => { if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1; return a.name.localeCompare(b.name) })
-  } catch { return [] }
-}

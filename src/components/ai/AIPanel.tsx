@@ -185,7 +185,7 @@ export function AIPanel() {
 
   const { settings, startPipeline, updateLayerProgress, completePipeline, pipelineRunning } = useAIStore()
   const { dna } = useDNAStore()
-  const { activeProject, openTabs, activeTabId } = useProjectStore()
+  const { activeProject, openTabs, activeTabId, refreshFileTree } = useProjectStore()
   const { appendAudit } = useGovernanceStore()
   const { sessionModel, sessionRole, setSessionModel, setSessionRole, availableModels, roleModels } = useModelStore()
   const activeTab = openTabs.find(t => t.id === activeTabId)
@@ -255,6 +255,7 @@ export function AIPanel() {
     setMsgs(p => [...p, { id: msgId, role: 'assistant', activity: [] }])
 
     const sys = buildAgentSystemPrompt({
+      projectPath: activeProject?.rootPath,
       systemName: dna?.identity?.systemName,
       corePurpose: dna?.identity?.corePurpose,
       systemLaws: dna?.systemLaws?.map((l: any) => l.rule) ?? [],
@@ -264,13 +265,14 @@ export function AIPanel() {
     const fullPrompt = activeTab ? `Context file: ${activeTab.filePath}\n\n${prompt}` : prompt
 
     try {
-      for await (const event of runAgent(fullPrompt, sys, apiKey)) {
+      for await (const event of runAgent(fullPrompt, sys, apiKey, activeProject?.rootPath)) {
         if (event.type === 'thinking') {
           pushActivity(msgId, { kind: 'thinking', text: event.text })
         } else if (event.type === 'tool_start') {
           pushActivity(msgId, { kind: 'tool', id: event.id, icon: event.icon, label: event.label, detail: event.detail, status: 'running' })
         } else if (event.type === 'tool_done') {
           patchTool(msgId, event.id, event.success ? 'done' : 'error', event.summary)
+          if (event.success && (event.tool === 'write_file' || event.tool === 'create_directory')) refreshFileTree()
         } else if (event.type === 'error') {
           setMsgs(p => p.map(m => m.id === msgId ? { ...m, content: `Error: ${event.message}` } : m))
         }
@@ -370,13 +372,14 @@ export function AIPanel() {
 
           const enrichedPrompt = `${prompt}${planContext}`
 
-          for await (const event of runAgent(enrichedPrompt, sys, apiKey)) {
+          for await (const event of runAgent(enrichedPrompt, sys, apiKey, activeProject?.rootPath)) {
             if (event.type === 'thinking') {
               pushActivity(msgId, { kind: 'thinking', text: event.text })
             } else if (event.type === 'tool_start') {
               pushActivity(msgId, { kind: 'tool', id: event.id, icon: event.icon, label: event.label, detail: event.detail, status: 'running' })
             } else if (event.type === 'tool_done') {
               patchTool(msgId, event.id, event.success ? 'done' : 'error', event.summary)
+              if (event.success && (event.tool === 'write_file' || event.tool === 'create_directory')) refreshFileTree()
             } else if (event.type === 'error') {
               pushActivity(msgId, { kind: 'thinking', text: `Agent error: ${event.message}` })
             }

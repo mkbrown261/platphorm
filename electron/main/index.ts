@@ -73,9 +73,10 @@ function registerIpcHandlers(): void {
   })
 
   ipcMain.handle('fs:writeFile', async (_event, filePath: string, content: string) => {
+    if (typeof filePath !== 'string' || !filePath) return { success: false, error: 'filePath must be a non-empty string' }
     try {
       fs.mkdirSync(path.dirname(filePath), { recursive: true })
-      fs.writeFileSync(filePath, content, 'utf-8')
+      fs.writeFileSync(filePath, content ?? '', 'utf-8')
       return { success: true }
     } catch (err) {
       return { success: false, error: String(err) }

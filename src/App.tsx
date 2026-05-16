@@ -7,6 +7,7 @@ import { AIPanel } from './components/ai/AIPanel'
 import { useAIStore } from './store/aiStore'
 import { useGovernanceStore } from './store/governanceStore'
 import { useDNAStore } from './store/dnaStore'
+import { useProjectStore } from './store/projectStore'
 import { orchestrator, setRoleModelOverrides, setIdentityContext } from './core/providers/AIOrchestrator'
 import { wireGovernanceStore } from './core/governance/GovernanceEngine'
 import { SettingsModal } from './components/settings/SettingsModal'
@@ -19,6 +20,7 @@ export default function App() {
   const { appendAudit, addEvent } = useGovernanceStore()
   const { roleModels, setAvailableModels, setLoadingModels } = useModelStore()
   const { dna } = useDNAStore()
+  const { activeProject, refreshFileTree } = useProjectStore()
 
   // Wire GovernanceEngine → governanceStore
   useEffect(() => {
@@ -91,6 +93,11 @@ export default function App() {
       setLoadingModels(false)
     }
   }
+
+  // Rebuild file tree from disk on startup if a project was persisted
+  useEffect(() => {
+    if (activeProject?.rootPath) refreshFileTree()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keyboard shortcut for settings
   useEffect(() => {
