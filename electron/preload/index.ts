@@ -16,6 +16,14 @@ const api = {
     mkdir: (dirPath: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('fs:mkdir', dirPath),
     getHome: (): Promise<string> => ipcRenderer.invoke('fs:getHome')
+  },
+  // Persistent settings — API keys survive app restarts.
+  // Stored in OS user-data dir via electron-store, never in source control.
+  store: {
+    get:    (key: string): Promise<unknown>                      => ipcRenderer.invoke('store:get', key),
+    set:    (key: string, value: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('store:set', key, value),
+    delete: (key: string): Promise<{ success: boolean }>         => ipcRenderer.invoke('store:delete', key),
+    getAll: (): Promise<Record<string, unknown>>                  => ipcRenderer.invoke('store:getAll')
   }
 }
 

@@ -1,8 +1,10 @@
 import type { AIProviderInterface, GenerationOptions, GenerationResult, ModelConfig, StreamChunk } from '../../../types'
 
 export abstract class BaseAIProvider implements AIProviderInterface {
-  protected apiKey: string
-  protected baseURL: string
+  // public readonly so AIOrchestrator.getProviderCredentials() can resolve
+  // credentials without casting — no other code should mutate these.
+  readonly apiKey: string
+  readonly baseURL: string
 
   constructor(apiKey: string, baseURL: string) {
     this.apiKey = apiKey

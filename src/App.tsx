@@ -14,11 +14,40 @@ export default function App() {
   const { settings, updateSettings, setConfigured } = useAIStore()
 
   useEffect(() => {
-    const key = import.meta.env.VITE_OPENROUTER_API_KEY
-    if (key) {
-      orchestrator.addProvider({ provider: 'openrouter', apiKey: key })
-      updateSettings({ providers: { openrouter: key }, preferredProvider: 'openrouter' })
-      setConfigured(true)
+    // Restore runtime-saved API keys from electron-store first,
+    // then fall back to build-time env var if nothing is persisted.
+    const applyEnvFallback = (existingProviders: Record<string, string>) => {
+      const envKey = import.meta.env.VITE_OPENROUTER_API_KEY
+      const hasAnyKey = Object.values(existingProviders).some(k => !!k)
+      if (envKey && !hasAnyKey) {
+        orchestrator.addProvider({ provider: 'openrouter', apiKey: envKey })
+        updateSettings({ providers: { openrouter: envKey }, preferredProvider: 'openrouter' })
+        setConfigured(true)
+      }
+    }
+
+    if (typeof window !== 'undefined' && window.api?.store) {
+      window.api.store.getAll().then((stored: Record<string, unknown>) => {
+        const providers = (stored.providers ?? {}) as Record<string, string>
+        const preferred = (stored.preferredProvider as string) || 'openrouter'
+
+        const hasAnyKey = Object.values(providers).some(k => !!k)
+        if (hasAnyKey) {
+          // Wire every persisted provider key + preferred into the orchestrator
+          orchestrator.configure({ providers, preferredProvider: preferred })
+          updateSettings({ providers, preferredProvider: preferred })
+          setConfigured(true)
+        } else {
+          // Nothing in electron-store — try build-time env var
+          applyEnvFallback(providers)
+        }
+      }).catch(() => {
+        // electron-store unavailable (e.g. browser-only preview); use env var
+        applyEnvFallback({})
+      })
+    } else {
+      // Running outside Electron (e.g. Vite dev server preview)
+      applyEnvFallback({})
     }
   }, [])
 

@@ -14,16 +14,19 @@ import { AnthropicProvider } from './AnthropicProvider'
 import { OpenAIProvider } from './OpenAIProvider'
 import { OpenRouterProvider } from './OpenRouterProvider'
 
+// FIX: Normalized model IDs — OpenRouter-prefixed IDs (via openrouter.ai)
+// kept consistent with provider list declarations in OpenRouterProvider.ts.
+// Anthropic/OpenAI direct-provider IDs are resolved in selectModel() below.
 const ROLE_MODEL_MAP: Record<ModelRole, string> = {
-  architect: 'anthropic/claude-opus-4',
-  security: 'anthropic/claude-opus-4',
-  backend: 'anthropic/claude-sonnet-4-5',
-  frontend: 'anthropic/claude-sonnet-4-5',
-  refactor: 'anthropic/claude-sonnet-4-5',
-  performance: 'google/gemini-2.5-pro',
-  general: 'anthropic/claude-sonnet-4-5',
-  validation: 'deepseek/deepseek-r1',
-  continuity: 'google/gemini-2.5-pro'
+  architect:   'anthropic/claude-opus-4-5',   // best reasoning for architecture decisions
+  security:    'anthropic/claude-opus-4-5',   // highest trust for security analysis
+  backend:     'anthropic/claude-sonnet-4-5',
+  frontend:    'anthropic/claude-sonnet-4-5',
+  refactor:    'anthropic/claude-sonnet-4-5',
+  performance: 'google/gemini-2.5-pro',       // 1M context, strong at analysis
+  general:     'anthropic/claude-sonnet-4-5',
+  validation:  'deepseek/deepseek-r1',        // reasoning model, cost-effective
+  continuity:  'google/gemini-2.5-pro'
 }
 
 export class AIOrchestrator {
@@ -68,9 +71,12 @@ export class AIOrchestrator {
       return ROLE_MODEL_MAP[role] ?? ROLE_MODEL_MAP.general
     }
     if (provider === 'anthropic') {
+      // FIX: use consistent Anthropic model IDs (no openrouter prefix)
       return role === 'architect' || role === 'security'
-        ? 'claude-opus-4-7'
-        : 'claude-sonnet-4-6'
+        ? 'claude-opus-4-5'
+        : role === 'performance' || role === 'continuity'
+          ? 'claude-sonnet-4-5'   // Gemini unavailable on direct Anthropic
+          : 'claude-sonnet-4-5'
     }
     if (provider === 'openai') {
       return role === 'architect' || role === 'security' ? 'o3' : 'gpt-4o'
@@ -80,6 +86,38 @@ export class AIOrchestrator {
 
   private getProvider(name: ModelProvider): AIProviderInterface | null {
     return this.providers.get(name) ?? null
+  }
+
+  /**
+   * Resolves the best available provider credentials for a given role.
+   * Used by AgentRunner to get API key + baseURL without bypassing abstraction.
+   * Throws if no provider is configured.
+   */
+  getProviderCredentials(role: ModelRole = 'general'): {
+    apiKey: string
+    baseURL: string
+    model: string
+    provider: ModelProvider
+  } {
+    const order = [
+      this.preferredProvider,
+      ...this.fallbackOrder.filter(p => p !== this.preferredProvider)
+    ]
+
+    for (const providerName of order) {
+      const provider = this.providers.get(providerName)
+      if (!provider) continue
+
+      const apiKey  = provider.apiKey ?? ''
+      const baseURL = provider.baseURL ?? 'https://openrouter.ai/api/v1'
+      const model   = this.selectModel(role, providerName)
+
+      if (!apiKey) continue
+
+      return { apiKey, baseURL, model, provider: providerName }
+    }
+
+    throw new Error('No AI providers configured. Add an API key in Settings (⌘,).')
   }
 
   async orchestrate(request: OrchestratorRequest): Promise<OrchestratorResult> {

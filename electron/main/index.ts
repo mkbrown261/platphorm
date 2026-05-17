@@ -4,6 +4,24 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
+import Store from 'electron-store'
+
+// Persistent settings store — lives in the OS user-data directory,
+// never in source control. API keys are stored here so they survive restarts.
+const store = new Store<{
+  providers: { openrouter?: string; anthropic?: string; openai?: string }
+  preferredProvider: string
+  fontSize: number
+  fontFamily: string
+}>({
+  name: 'platphorm-settings',
+  defaults: {
+    providers: {},
+    preferredProvider: 'openrouter',
+    fontSize: 14,
+    fontFamily: "'JetBrains Mono', 'Fira Code', monospace"
+  }
+})
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -110,5 +128,26 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:getHome', async () => {
     return os.homedir()
+  })
+
+  // ── Persistent settings (electron-store) ──────────────────────────────────
+  // API keys are stored in the OS user-data directory — never in source control.
+
+  ipcMain.handle('store:get', (_event, key: string) => {
+    return store.get(key)
+  })
+
+  ipcMain.handle('store:set', (_event, key: string, value: unknown) => {
+    store.set(key, value)
+    return { success: true }
+  })
+
+  ipcMain.handle('store:delete', (_event, key: string) => {
+    store.delete(key as any)
+    return { success: true }
+  })
+
+  ipcMain.handle('store:getAll', () => {
+    return store.store
   })
 }

@@ -1,5 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
+import { extractJSON, safeParseJSON, clampScore } from '../utils'
 
 export async function runIntentLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -29,7 +30,7 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'architect' })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = safeParseJSON(result.result.content, {})
 
     if (parsed.isAmbiguous) {
       findings.push({
@@ -92,8 +93,6 @@ Respond in JSON:
     }
   }
 }
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
+/)
   return match ? match[0] : '{}'
 }

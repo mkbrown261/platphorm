@@ -52,6 +52,8 @@ export interface StreamChunk {
 }
 
 export interface AIProviderInterface {
+  readonly apiKey: string
+  readonly baseURL: string
   generate(prompt: string, options?: GenerationOptions): Promise<GenerationResult>
   stream(prompt: string, options?: GenerationOptions): AsyncGenerator<StreamChunk>
   isAvailable(): Promise<boolean>

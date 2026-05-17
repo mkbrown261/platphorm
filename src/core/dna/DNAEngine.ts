@@ -1,5 +1,6 @@
 import type { ADR, IntentContract, ProjectDNA } from '../../types'
 import { orchestrator } from '../providers/AIOrchestrator'
+import { extractJSON, safeParseJSON } from '../intelligence/utils'
 
 const EMPTY_DNA: ProjectDNA = {
   identity: {
@@ -116,7 +117,7 @@ Respond in JSON matching this structure exactly (no extra fields):
 
     try {
       const result = await orchestrator.orchestrate({ prompt, role: 'architect' })
-      const parsed = JSON.parse(extractJSON(result.result.content))
+      const parsed = safeParseJSON(result.result.content, {})
       this.dna = {
         ...EMPTY_DNA,
         ...(parsed as Partial<ProjectDNA>),
@@ -237,21 +238,36 @@ ${JSON.stringify(dna, null, 2)}
   }
 
   private async scanProjectFiles(projectPath: string): Promise<string[]> {
-    try {
-      const entries = await window.api.fs.readDir(projectPath)
-      const files: string[] = []
+    // Dirs to skip regardless of nesting depth
+    const SKIP_DIRS = new Set([
+      'node_modules', '.git', 'dist', 'build', 'out', '.next', '.nuxt',
+      '.turbo', '.cache', 'coverage', '__pycache__', '.venv', 'vendor'
+    ])
+    const MAX_FILES = 500   // safety cap — enough for AI context
+    const MAX_DEPTH = 10    // fully recursive up to 10 levels
+
+    const files: string[] = []
+
+    const walk = async (dir: string, depth: number): Promise<void> => {
+      if (depth > MAX_DEPTH || files.length >= MAX_FILES) return
+      let entries: { name: string; path: string; isDirectory: boolean }[]
+      try {
+        entries = await window.api.fs.readDir(dir)
+      } catch {
+        return
+      }
       for (const entry of entries) {
-        if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
+        if (files.length >= MAX_FILES) break
+        if (entry.name.startsWith('.') || SKIP_DIRS.has(entry.name)) continue
         files.push(entry.path)
         if (entry.isDirectory) {
-          const subEntries = await window.api.fs.readDir(entry.path)
-          files.push(...subEntries.filter((e) => !e.name.startsWith('.')).map((e) => e.path))
+          await walk(entry.path, depth + 1)
         }
       }
-      return files
-    } catch {
-      return []
     }
+
+    await walk(projectPath, 0)
+    return files
   }
 
   private async readFile(filePath: string): Promise<string | null> {
@@ -268,8 +284,3 @@ ${JSON.stringify(dna, null, 2)}
 }
 
 export const dnaEngine = new DNAEngine()
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
-  return match ? match[0] : '{}'
-}

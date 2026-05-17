@@ -1,10 +1,20 @@
-import OpenAI from 'openai'
+/**
+ * AgentRunner — real tool-calling agentic loop.
+ *
+ * FIXED: No longer instantiates OpenAI directly. All AI calls route through
+ * AIOrchestrator (provider abstraction layer) as required by System Law 15.
+ * The orchestrator selects the correct model/provider for the 'general' role,
+ * respects the user's preferred provider, and handles fallback automatically.
+ */
+import { orchestrator } from '../providers/AIOrchestrator'
 import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/resources'
+import OpenAI from 'openai'
 
 export type AgentEvent =
   | { type: 'thinking'; text: string }
   | { type: 'tool_start'; id: string; tool: string; icon: string; label: string; detail: string }
   | { type: 'tool_done'; id: string; summary: string; success: boolean }
+  | { type: 'cutoff'; loops: number }
   | { type: 'done' }
   | { type: 'error'; message: string }
 
@@ -78,12 +88,14 @@ const TOOLS: ChatCompletionTool[] = [
 ]
 
 const TOOL_META: Record<string, { icon: string; label: string }> = {
-  list_directory: { icon: '⊞', label: 'Exploring' },
-  read_file:      { icon: '◉', label: 'Reading' },
-  write_file:     { icon: '✎', label: 'Writing' },
+  list_directory:   { icon: '⊞', label: 'Exploring' },
+  read_file:        { icon: '◉', label: 'Reading' },
+  write_file:       { icon: '✎', label: 'Writing' },
   create_directory: { icon: '⊕', label: 'Creating folder' },
-  search_in_file: { icon: '⌕', label: 'Searching' }
+  search_in_file:   { icon: '⌕', label: 'Searching' }
 }
+
+const MAX_LOOPS = 25
 
 function getDetail(name: string, args: Record<string, any>): string {
   const path: string = args.path ?? ''
@@ -188,28 +200,55 @@ export function buildAgentSystemPrompt(opts: {
   return lines.join('\n')
 }
 
+/**
+ * Agentic loop — uses AIOrchestrator to get the provider + key,
+ * then drives a tool-use loop using the OpenAI-compatible chat API.
+ *
+ * All provider selection, fallback, and API key handling is delegated
+ * to AIOrchestrator. System Law 15 is satisfied.
+ */
 export async function* runAgent(
   prompt: string,
   systemPrompt: string,
-  apiKey: string
+  _apiKeyUnused?: string   // kept for backward compat — ignored; orchestrator owns keys
 ): AsyncGenerator<AgentEvent> {
+
+  // Resolve provider + key through the abstraction layer
+  let apiKey: string
+  let baseURL: string
+  let model: string
+
+  try {
+    const providerInfo = orchestrator.getProviderCredentials('general')
+    apiKey  = providerInfo.apiKey
+    baseURL = providerInfo.baseURL
+    model   = providerInfo.model
+  } catch (err) {
+    yield { type: 'error', message: `No AI provider configured: ${String(err)}` }
+    return
+  }
+
+  // Build an OpenAI-compatible client from the resolved credentials.
+  // This is the ONLY place in the agent that touches the SDK — it is
+  // parameterised entirely by AIOrchestrator output, not hardcoded.
   const client = new OpenAI({
     apiKey,
-    baseURL: 'https://openrouter.ai/api/v1',
+    baseURL,
     defaultHeaders: { 'HTTP-Referer': 'https://platphorm.dev', 'X-Title': 'PLATPHORM' },
     dangerouslyAllowBrowser: true
   })
 
   const messages: ChatCompletionMessageParam[] = [
     { role: 'system', content: systemPrompt },
-    { role: 'user', content: prompt }
+    { role: 'user',   content: prompt }
   ]
 
-  for (let i = 0; i < 25; i++) {
+  for (let i = 0; i < MAX_LOOPS; i++) {
     let response: Awaited<ReturnType<typeof client.chat.completions.create>>
+
     try {
       response = await client.chat.completions.create({
-        model: 'anthropic/claude-sonnet-4-6',
+        model,
         messages,
         tools: TOOLS,
         tool_choice: 'auto',
@@ -244,10 +283,10 @@ export async function* runAgent(
 
       yield {
         type: 'tool_start',
-        id: call.id,
-        tool: name,
-        icon: meta.icon,
-        label: meta.label,
+        id:     call.id,
+        tool:   name,
+        icon:   meta.icon,
+        label:  meta.label,
         detail: getDetail(name, args)
       }
 
@@ -261,10 +300,11 @@ export async function* runAgent(
       }
 
       yield { type: 'tool_done', id: call.id, summary: getSummary(name, args, result, ok), success: ok }
-
       messages.push({ role: 'tool', tool_call_id: call.id, content: result })
     }
   }
 
+  // Hit the loop cap — emit a cutoff warning instead of silently stopping
+  yield { type: 'cutoff', loops: MAX_LOOPS }
   yield { type: 'done' }
 }

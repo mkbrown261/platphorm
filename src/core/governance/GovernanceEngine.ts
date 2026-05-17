@@ -35,27 +35,39 @@ class GovernanceEngine {
       if (!law.locked) continue
 
       // Law 4: No hardcoded secrets
-      if (law.id === 4 && /secret|password|apikey/i.test(code) && /=\s*["'][^"']+["']/i.test(code)) {
+      if (law.id === 4 && /(?:secret|password|api[_-]?key)\s*=\s*["'][^"']{8,}["']/i.test(code)) {
         violations.push({
           lawId: 4,
           pattern: 'hardcoded-secret',
-          description: 'System Law 4 violated: No hardcoded secrets',
+          description: 'System Law 4 violated: No hardcoded secrets or API keys',
           severity: 'critical'
         })
       }
 
-      // Law 5: No business logic inside UI components
-      if (law.id === 5 && /\.tsx/.test(code) && /fetch\(|axios\.|supabase\./i.test(code)) {
-        violations.push({
-          lawId: 5,
-          pattern: 'business-logic-in-ui',
-          description: 'System Law 5 violated: Business logic detected in UI component',
-          severity: 'high'
-        })
+      // Law 5: No business logic inside UI components.
+      // FIX: was too broad — `/\.tsx/.test(code)` matched the word ".tsx" anywhere,
+      // and `fetch\(` matched legitimate hook files. Now we check for direct HTTP
+      // calls at the top level of a component function body (heuristic: not inside
+      // a custom hook file, i.e. filename doesn't start with "use").
+      // We also exclude legitimate patterns like useFetch, useQuery, etc.
+      if (law.id === 5) {
+        const hasDirectFetch = /\bfetch\s*\(|axios\.(get|post|put|patch|delete)\s*\(/i.test(code)
+        const isCustomHook   = /^(export\s+)?(?:default\s+)?function\s+use[A-Z]/m.test(code)
+        const isInsideEffect = /useEffect\s*\(\s*\(\s*\)\s*=>\s*\{[\s\S]{0,500}\bfetch\b/m.test(code)
+
+        if (hasDirectFetch && !isCustomHook && !isInsideEffect) {
+          violations.push({
+            lawId: 5,
+            pattern: 'business-logic-in-ui',
+            description:
+              'System Law 5 violated: Direct HTTP call in UI component — move to a service/hook',
+            severity: 'high'
+          })
+        }
       }
 
       // Law 10: No placeholder logic
-      if (law.id === 10 && /TODO|FIXME|placeholder|not implemented|coming soon/i.test(code)) {
+      if (law.id === 10 && /\b(TODO|FIXME|placeholder|not implemented|coming soon)\b/i.test(code)) {
         violations.push({
           lawId: 10,
           pattern: 'placeholder-logic',

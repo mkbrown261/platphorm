@@ -5,7 +5,7 @@ import { useProjectStore } from '../../store/projectStore'
 import { runPipeline } from '../../core/intelligence/Pipeline'
 import { runAgent, buildAgentSystemPrompt } from '../../core/intelligence/AgentRunner'
 import { orchestrator } from '../../core/providers/AIOrchestrator'
-import type { PipelineContext, LayerResult } from '../../types'
+import type { PipelineContext, LayerResult, PipelineResult } from '../../types'
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -13,6 +13,7 @@ type ActivityItem =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; id: string; icon: string; label: string; detail: string; status: 'running'|'done'|'error'; summary?: string }
   | { kind: 'pipeline'; index: number; label: string; description: string; status: 'running'|'done'|'warned'|'failed' }
+  | { kind: 'cutoff'; loops: number }
 
 interface Msg {
   id: string
@@ -21,6 +22,12 @@ interface Msg {
   activity?: ActivityItem[]
   score?: number
   approved?: boolean
+}
+
+/** Pending confirmation — resolves true (proceed) or false (cancel) */
+interface ConfirmRequest {
+  result: PipelineResult
+  resolve: (proceed: boolean) => void
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -38,6 +45,106 @@ const SUGGESTIONS = [
   'Refactor for better performance',
   'Fix security vulnerabilities'
 ]
+
+// ─── Confirmation Dialog ──────────────────────────────────────────────────────
+
+function ConfirmDialog({ req, prompt }: { req: ConfirmRequest; prompt: string }) {
+  const { result } = req
+
+  // Summarise what the agent will do (warnings + blockers omitted since result.approved=true)
+  const warnings = result.layers.flatMap(l =>
+    l.findings.filter(f => f.severity === 'high' || f.severity === 'medium')
+  )
+
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, zIndex: 50,
+      background: 'rgba(6,7,13,0.85)', backdropFilter: 'blur(6px)',
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      padding: 20
+    }}>
+      <div style={{
+        width: '100%', maxWidth: 300,
+        background: '#0f1017', border: '1px solid rgba(124,58,237,0.35)',
+        borderRadius: 14, overflow: 'hidden',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.6), 0 0 0 1px rgba(124,58,237,0.15)'
+      }}>
+        {/* Header */}
+        <div style={{ padding: '14px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ fontSize: 13, color: '#4ade80' }}>✓</span>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.85)' }}>Governance Passed</div>
+            <div style={{ fontSize: 10, color: 'rgba(34,197,94,0.7)', fontFamily: 'monospace' }}>{result.overallScore}/100 · All 10 layers</div>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1 }}>Request</div>
+            <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.7)', lineHeight: 1.55, maxHeight: 80, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {prompt.length > 120 ? prompt.slice(0, 120) + '…' : prompt}
+            </div>
+          </div>
+
+          {warnings.length > 0 && (
+            <div>
+              <div style={{ fontSize: 10, color: 'rgba(245,158,11,0.7)', marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1 }}>⚠ Warnings ({warnings.length})</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 100, overflowY: 'auto' }}>
+                {warnings.slice(0, 5).map((w, i) => (
+                  <div key={i} style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', lineHeight: 1.4, padding: '4px 8px', background: 'rgba(245,158,11,0.05)', borderRadius: 6, borderLeft: '2px solid rgba(245,158,11,0.3)' }}>
+                    {w.message}
+                  </div>
+                ))}
+                {warnings.length > 5 && (
+                  <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.25)', textAlign: 'center' }}>+{warnings.length - 5} more</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.3)', lineHeight: 1.55, padding: '8px 10px', background: 'rgba(255,255,255,0.03)', borderRadius: 8, border: '1px solid rgba(255,255,255,0.06)' }}>
+            The agent will now write files to your project. This action modifies your codebase and cannot be automatically undone.
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(255,255,255,0.06)', display: 'flex', gap: 8 }}>
+          <button
+            onClick={() => req.resolve(false)}
+            style={{
+              flex: 1, padding: '9px 0', borderRadius: 9,
+              background: 'transparent', border: '1px solid rgba(255,255,255,0.1)',
+              color: 'rgba(255,255,255,0.4)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit',
+              transition: 'all 0.15s'
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.2)'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.7)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.borderColor = 'rgba(255,255,255,0.1)'; (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.4)' }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => req.resolve(true)}
+            style={{
+              flex: 2, padding: '9px 0', borderRadius: 9,
+              background: 'linear-gradient(135deg, #16a34a, #15803d)',
+              border: '1px solid rgba(34,197,94,0.35)',
+              color: 'white', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
+              boxShadow: '0 0 16px rgba(34,197,94,0.2)',
+              transition: 'all 0.15s'
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 0 24px rgba(34,197,94,0.35)' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.boxShadow = '0 0 16px rgba(34,197,94,0.2)' }}
+          >
+            Confirm &amp; Build
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
@@ -106,6 +213,26 @@ function PipelineCard({ item }: { item: Extract<ActivityItem, { kind: 'pipeline'
   )
 }
 
+/** FIX 11: Renders the agent loop-cap warning */
+function CutoffCard({ item }: { item: Extract<ActivityItem, { kind: 'cutoff' }> }) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '8px 12px', borderRadius: 8,
+      background: 'rgba(245,158,11,0.06)',
+      border: '1px solid rgba(245,158,11,0.2)'
+    }}>
+      <span style={{ fontSize: 14, flexShrink: 0 }}>⚠</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 11, color: 'rgba(245,158,11,0.85)', fontWeight: 600 }}>Agent loop limit reached</div>
+        <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 2, lineHeight: 1.45 }}>
+          The agent completed {item.loops} tool-use loops without finishing. The task may be partially done — check your files and re-prompt if needed.
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ThinkingBubble({ text }: { text: string }) {
   return (
     <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.7)', lineHeight: 1.65, whiteSpace: 'pre-wrap', padding: '2px 0' }}>
@@ -122,6 +249,7 @@ function ActivityStream({ items }: { items: ActivityItem[] }) {
         if (item.kind === 'thinking') return <ThinkingBubble key={i} text={item.text} />
         if (item.kind === 'tool') return <ToolCard key={item.id} item={item} />
         if (item.kind === 'pipeline') return <PipelineCard key={item.index} item={item} />
+        if (item.kind === 'cutoff') return <CutoffCard key={`cutoff-${i}`} item={item} />
         return null
       })}
     </div>
@@ -169,6 +297,8 @@ export function AIPanel() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
+  /** FIX 10: pending confirmation request — shown as modal overlay */
+  const [confirmReq, setConfirmReq] = useState<ConfirmRequest | null>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const taRef = useRef<HTMLTextAreaElement>(null)
 
@@ -202,6 +332,16 @@ export function AIPanel() {
       if (m.id !== msgId || !m.activity) return m
       return { ...m, activity: m.activity.map(a => a.kind === 'tool' && a.id === id ? { ...a, status, summary } : a) }
     }))
+  }, [])
+
+  /**
+   * FIX 10: Show a confirmation dialog after governance passes.
+   * Returns a Promise that resolves `true` (proceed) or `false` (cancel).
+   */
+  const requestConfirmation = useCallback((result: PipelineResult): Promise<boolean> => {
+    return new Promise<boolean>((resolve) => {
+      setConfirmReq({ result, resolve })
+    })
   }, [])
 
   const send = useCallback(async () => {
@@ -252,6 +392,9 @@ export function AIPanel() {
           pushActivity(msgId, { kind: 'tool', id: event.id, icon: event.icon, label: event.label, detail: event.detail, status: 'running' })
         } else if (event.type === 'tool_done') {
           patchTool(msgId, event.id, event.success ? 'done' : 'error', event.summary)
+        } else if (event.type === 'cutoff') {
+          // FIX 11: show loop-cap warning in activity stream
+          pushActivity(msgId, { kind: 'cutoff', loops: event.loops })
         } else if (event.type === 'error') {
           setMsgs(p => p.map(m => m.id === msgId ? { ...m, content: `Error: ${event.message}` } : m))
         }
@@ -298,9 +441,21 @@ export function AIPanel() {
 
       completePipeline(result)
 
-      // After governance passes, run agent to actually build the code
       if (result.approved) {
-        pushActivity(msgId, { kind: 'thinking', text: `Governance passed ${result.overallScore}/100. Building now...` })
+        // ── FIX 10: Explicit user confirmation before writing any files ──────
+        pushActivity(msgId, { kind: 'thinking', text: `Governance passed ${result.overallScore}/100 — awaiting your confirmation to write files.` })
+
+        const userConfirmed = await requestConfirmation(result)
+        setConfirmReq(null)  // always dismiss the dialog
+
+        if (!userConfirmed) {
+          pushActivity(msgId, { kind: 'thinking', text: 'Build cancelled by user.' })
+          setMsgs(p => p.map(m => m.id === msgId ? { ...m, score: result.overallScore, approved: false } : m))
+          return
+        }
+
+        // User confirmed — proceed to agent execution
+        pushActivity(msgId, { kind: 'thinking', text: `Building now…` })
 
         const sys = buildAgentSystemPrompt({
           projectPath: activeProject!.rootPath,
@@ -317,6 +472,9 @@ export function AIPanel() {
             pushActivity(msgId, { kind: 'tool', id: event.id, icon: event.icon, label: event.label, detail: event.detail, status: 'running' })
           } else if (event.type === 'tool_done') {
             patchTool(msgId, event.id, event.success ? 'done' : 'error', event.summary)
+          } else if (event.type === 'cutoff') {
+            // FIX 11: loop-cap warning in pipeline flow too
+            pushActivity(msgId, { kind: 'cutoff', loops: event.loops })
           } else if (event.type === 'error') {
             pushActivity(msgId, { kind: 'thinking', text: `Agent error: ${event.message}` })
           }
@@ -337,7 +495,15 @@ export function AIPanel() {
   // ─── Render ───────────────────────────────────────────────────────────────
 
   return (
-    <div style={{ width: 340, flexShrink: 0, background: '#090a11', borderLeft: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <div style={{ width: 340, flexShrink: 0, background: '#090a11', borderLeft: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
+
+      {/* FIX 10: Confirmation dialog overlay — blocks the panel while waiting */}
+      {confirmReq && (
+        <ConfirmDialog
+          req={confirmReq}
+          prompt={[...msgs].reverse().find(m => m.role === 'user')?.content ?? ''}
+        />
+      )}
 
       {/* Header */}
       <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
@@ -353,14 +519,14 @@ export function AIPanel() {
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 600, color: 'rgba(255,255,255,0.8)' }}>PLATPHORM AI</div>
-          <div style={{ fontSize: 10, color: busy ? '#a78bfa' : '#22c55e', transition: 'color 0.3s' }}>
-            {busy ? (activeProject ? 'Running governance pipeline...' : 'Agent working...') : (dna ? dna.identity?.systemName : 'Ready')}
+          <div style={{ fontSize: 10, color: confirmReq ? '#f59e0b' : busy ? '#a78bfa' : '#22c55e', transition: 'color 0.3s' }}>
+            {confirmReq ? 'Awaiting confirmation…' : busy ? (activeProject ? 'Running governance pipeline...' : 'Agent working...') : (dna ? dna.identity?.systemName : 'Ready')}
           </div>
         </div>
         <div style={{
           width: 7, height: 7, borderRadius: '50%', flexShrink: 0,
-          background: busy ? '#a78bfa' : '#22c55e',
-          boxShadow: busy ? '0 0 10px #a78bfa' : '0 0 6px #22c55e',
+          background: confirmReq ? '#f59e0b' : busy ? '#a78bfa' : '#22c55e',
+          boxShadow: confirmReq ? '0 0 10px #f59e0b' : busy ? '0 0 10px #a78bfa' : '0 0 6px #22c55e',
           transition: 'all 0.3s',
           animation: busy ? 'glow 1.5s ease-in-out infinite' : 'none'
         }} />
@@ -391,14 +557,14 @@ export function AIPanel() {
               <div style={{ fontSize: 14, fontWeight: 600, color: 'rgba(255,255,255,0.7)', marginBottom: 6 }}>Build anything</div>
               <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.25)', lineHeight: 1.6, maxWidth: 220 }}>
                 {activeProject
-                  ? 'Requests pass through 10 governance layers, then I build directly in your project.'
+                  ? 'Requests pass through 10 governance layers. You confirm before files are written.'
                   : 'Open a project for full agent mode with file creation.'}
               </div>
             </div>
             {activeProject && (
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 14px', background: 'rgba(34,197,94,0.06)', border: '1px solid rgba(34,197,94,0.15)', borderRadius: 99, fontSize: 11, color: 'rgba(34,197,94,0.7)' }}>
                 <span>●</span>
-                <span>Agent mode · files will be created</span>
+                <span>Agent mode · confirmation required before write</span>
               </div>
             )}
             <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -442,7 +608,7 @@ export function AIPanel() {
                 {/* Plain text fallback */}
                 {msg.content && <div>{renderMarkdown(msg.content)}</div>}
 
-                {/* Typing indicator — show when busy and this is the last message and it has no content yet */}
+                {/* Typing indicator */}
                 {busy && msg === msgs[msgs.length - 1] && !msg.content && (!msg.activity || msg.activity.length === 0) && (
                   <TypingDots />
                 )}
@@ -460,27 +626,28 @@ export function AIPanel() {
 
       {/* Input */}
       <div style={{ padding: '10px 12px 12px', borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
-        <div style={{ position: 'relative', background: 'rgba(255,255,255,0.04)', border: `1px solid ${busy ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.09)'}`, borderRadius: 12, transition: 'border-color 0.2s' }}>
+        <div style={{ position: 'relative', background: 'rgba(255,255,255,0.04)', border: `1px solid ${busy || confirmReq ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.09)'}`, borderRadius: 12, transition: 'border-color 0.2s' }}>
           <textarea
             ref={taRef}
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send() } }}
-            placeholder={activeProject ? 'Build anything — agent will create files...' : 'Ask PLATPHORM...'}
+            placeholder={activeProject ? 'Build anything — governance runs first, then you confirm…' : 'Ask PLATPHORM...'}
             rows={3}
-            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', padding: '11px 13px 34px', fontSize: 13, color: 'rgba(255,255,255,0.8)', resize: 'none', fontFamily: 'Inter, sans-serif', lineHeight: 1.5 }}
+            disabled={!!confirmReq}
+            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', padding: '11px 13px 34px', fontSize: 13, color: 'rgba(255,255,255,0.8)', resize: 'none', fontFamily: 'Inter, sans-serif', lineHeight: 1.5, opacity: confirmReq ? 0.4 : 1 }}
           />
           <div style={{ position: 'absolute', bottom: 8, left: 12, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>⌘↵</span>
             <button
               onClick={send}
-              disabled={!input.trim() || busy}
+              disabled={!input.trim() || busy || !!confirmReq}
               style={{
                 width: 28, height: 28, borderRadius: 8, border: 'none', flexShrink: 0,
-                background: input.trim() && !busy ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'rgba(255,255,255,0.06)',
-                cursor: input.trim() && !busy ? 'pointer' : 'not-allowed',
+                background: input.trim() && !busy && !confirmReq ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'rgba(255,255,255,0.06)',
+                cursor: input.trim() && !busy && !confirmReq ? 'pointer' : 'not-allowed',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
-                boxShadow: input.trim() && !busy ? '0 0 14px rgba(124,58,237,0.4)' : 'none',
+                boxShadow: input.trim() && !busy && !confirmReq ? '0 0 14px rgba(124,58,237,0.4)' : 'none',
                 transition: 'all 0.2s'
               }}
             >

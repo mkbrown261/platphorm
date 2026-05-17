@@ -1,5 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
+import { extractJSON, safeParseJSON, clampScore } from '../utils'
 
 export async function runContinuityLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -63,7 +64,7 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'refactor' })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = safeParseJSON(result.result.content, {})
     const findings: Finding[] = []
 
     for (const f of parsed.findings ?? []) {
@@ -98,8 +99,6 @@ Respond in JSON:
     }
   }
 }
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
+/)
   return match ? match[0] : '{}'
 }

@@ -37,18 +37,47 @@ export function SettingsModal({ onClose }: Props) {
   const [saved, setSaved] = useState(false)
   const [tab, setTab] = useState<'providers' | 'editor' | 'governance'>('providers')
 
+  // On mount: prefer persisted keys from electron-store over env var
   useEffect(() => {
-    const envKey = import.meta.env.VITE_OPENROUTER_API_KEY
-    if (envKey && !keys.openrouter) setKeys(k => ({ ...k, openrouter: envKey }))
+    window.api.store.get('providers').then((persisted: any) => {
+      if (persisted && typeof persisted === 'object') {
+        setKeys(k => ({
+          openrouter: persisted.openrouter || k.openrouter,
+          anthropic:  persisted.anthropic  || k.anthropic,
+          openai:     persisted.openai     || k.openai
+        }))
+      } else {
+        // Fall back to env var only if no persisted keys exist
+        const envKey = import.meta.env.VITE_OPENROUTER_API_KEY
+        if (envKey) setKeys(k => ({ ...k, openrouter: k.openrouter || envKey }))
+      }
+    }).catch(() => {
+      const envKey = import.meta.env.VITE_OPENROUTER_API_KEY
+      if (envKey) setKeys(k => ({ ...k, openrouter: k.openrouter || envKey }))
+    })
   }, [])
 
-  const save = () => {
-    Object.entries(keys).forEach(([provider, key]) => {
-      if (key.trim()) orchestrator.addProvider({ provider: provider as any, apiKey: key.trim() })
+  const save = async () => {
+    const trimmed = {
+      openrouter: keys.openrouter.trim(),
+      anthropic:  keys.anthropic.trim(),
+      openai:     keys.openai.trim()
+    }
+    // Register active providers with orchestrator
+    Object.entries(trimmed).forEach(([provider, key]) => {
+      if (key) orchestrator.addProvider({ provider: provider as any, apiKey: key })
     })
-    const preferred = keys.openrouter ? 'openrouter' : keys.anthropic ? 'anthropic' : keys.openai ? 'openai' : settings.preferredProvider
-    updateSettings({ providers: keys, preferredProvider: preferred })
-    setConfigured(Object.values(keys).some(k => k.trim().length > 0))
+    const preferred = trimmed.openrouter ? 'openrouter'
+      : trimmed.anthropic ? 'anthropic'
+      : trimmed.openai    ? 'openai'
+      : settings.preferredProvider
+    updateSettings({ providers: trimmed, preferredProvider: preferred })
+    setConfigured(Object.values(trimmed).some(k => k.length > 0))
+
+    // Persist to electron-store so keys survive app restarts
+    await window.api.store.set('providers', trimmed).catch(() => {})
+    await window.api.store.set('preferredProvider', preferred).catch(() => {})
+
     setSaved(true)
     setTimeout(() => { setSaved(false); onClose() }, 800)
   }

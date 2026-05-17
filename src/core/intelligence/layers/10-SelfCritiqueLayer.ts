@@ -1,5 +1,6 @@
 import type { Finding, LayerResult, PipelineContext, QualityScorecard } from '../../../types'
 import { orchestrator } from '../../providers/AIOrchestrator'
+import { extractJSON, safeParseJSON, clampScore } from '../utils'
 
 export async function runSelfCritiqueLayer(
   context: PipelineContext,
@@ -68,7 +69,7 @@ Respond in JSON:
       role: 'architect',
       options: { temperature: 0.1 }
     })
-    const parsed = JSON.parse(extractJSON(result.result.content))
+    const parsed = safeParseJSON(result.result.content, {})
 
     for (const f of parsed.findings ?? []) {
       findings.push({
@@ -124,8 +125,6 @@ Respond in JSON:
     }
   }
 }
-
-function extractJSON(text: string): string {
-  const match = text.match(/\{[\s\S]*\}/)
+/)
   return match ? match[0] : '{}'
 }
