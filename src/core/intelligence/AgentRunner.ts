@@ -221,6 +221,22 @@ function getSummary(name: string, args: Record<string, any>, result: string, ok:
   }
 }
 
+/** Resolve a path from the agent — if it's not absolute, join it to projectPath */
+function resolvePath(rawPath: string, projectPath: string): string {
+  if (!rawPath || typeof rawPath !== 'string') {
+    throw new Error(`path argument must be a non-empty string. Got: ${JSON.stringify(rawPath)}. Use the full absolute path like ${projectPath}/src/App.tsx`)
+  }
+  const p = rawPath.trim()
+  if (!p) {
+    throw new Error(`path argument is empty. Use the full absolute path, e.g. ${projectPath}/src/components/MyComponent.tsx`)
+  }
+  // If not absolute, resolve relative to project root
+  if (!p.startsWith('/')) {
+    return `${projectPath}/${p}`
+  }
+  return p
+}
+
 async function executeTool(
   name: string,
   args: Record<string, any>,
@@ -228,37 +244,47 @@ async function executeTool(
 ): Promise<string> {
   switch (name) {
     case 'read_file': {
-      const c = await window.api.fs.readFile(args.path)
+      const resolvedPath = resolvePath(args.path, projectPath)
+      const c = await window.api.fs.readFile(resolvedPath)
       return c ?? '(empty or not found)'
     }
     case 'write_file': {
-      const r = await window.api.fs.writeFile(args.path, args.content)
+      const resolvedPath = resolvePath(args.path, projectPath)
+      if (!args.content && args.content !== '') {
+        throw new Error(`write_file: content is missing for path ${resolvedPath}`)
+      }
+      const r = await window.api.fs.writeFile(resolvedPath, args.content)
       if (!r.success) throw new Error(r.error ?? 'write failed')
-      return `Written: ${args.path}`
+      return `Written: ${resolvedPath}`
     }
     case 'edit_file': {
-      const current = await window.api.fs.readFile(args.path)
-      if (!current) throw new Error(`File not found: ${args.path}`)
+      const resolvedPath = resolvePath(args.path, projectPath)
+      const current = await window.api.fs.readFile(resolvedPath)
+      if (!current) throw new Error(`File not found: ${resolvedPath}`)
+      if (!args.old_content) throw new Error(`edit_file: old_content is required`)
       if (!current.includes(args.old_content)) {
-        throw new Error(`edit_file: old_content not found in ${args.path}. Read the file first and use exact matching lines.`)
+        throw new Error(`edit_file: old_content not found in ${resolvedPath}. Read the file first and use exact matching lines.`)
       }
-      const updated = current.replace(args.old_content, args.new_content)
-      const r = await window.api.fs.writeFile(args.path, updated)
+      const updated = current.replace(args.old_content, args.new_content ?? '')
+      const r = await window.api.fs.writeFile(resolvedPath, updated)
       if (!r.success) throw new Error(r.error ?? 'write failed')
-      return `Patched: ${args.path}`
+      return `Patched: ${resolvedPath}`
     }
     case 'list_directory': {
-      const entries = await window.api.fs.readDir(args.path)
+      const resolvedPath = resolvePath(args.path, projectPath)
+      const entries = await window.api.fs.readDir(resolvedPath)
       if (!entries.length) return '(empty)'
       return entries.map(e => `${e.isDirectory ? '[dir]' : '[file]'} ${e.name}`).join('\n')
     }
     case 'create_directory': {
-      const r = await window.api.fs.mkdir(args.path)
+      const resolvedPath = resolvePath(args.path, projectPath)
+      const r = await window.api.fs.mkdir(resolvedPath)
       if (!r.success) throw new Error(r.error ?? 'mkdir failed')
-      return `Created: ${args.path}`
+      return `Created: ${resolvedPath}`
     }
     case 'search_in_file': {
-      const c = await window.api.fs.readFile(args.path)
+      const resolvedPath = resolvePath(args.path, projectPath)
+      const c = await window.api.fs.readFile(resolvedPath)
       if (!c) return '(file not found)'
       const hits = c.split('\n')
         .map((l, i) => ({ line: i + 1, text: l }))
@@ -506,7 +532,13 @@ ${opts.systemLaws.map((l, i) => `${i + 1}. ${l}`).join('\n')}` : ''}${opts.forbi
 ${opts.forbiddenPatterns.join('\n')}` : ''}${opts.projectPath ? `
 ━━━ PROJECT CONTEXT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Root: ${opts.projectPath}${opts.systemName ? `\nSystem: ${opts.systemName}` : ''}${opts.corePurpose ? `\nPurpose: ${opts.corePurpose}` : ''}` : ''}${opts.conversationSummary ? `
+Root: ${opts.projectPath}${opts.systemName ? `\nSystem: ${opts.systemName}` : ''}${opts.corePurpose ? `\nPurpose: ${opts.corePurpose}` : ''}
+
+CRITICAL — PATH RULES:
+- ALWAYS use absolute paths in every tool call. Never use relative paths like "src/App.tsx".
+- ALL file paths must start with: ${opts.projectPath}
+- Example: ${opts.projectPath}/src/components/MyComponent.tsx
+- When in doubt about a path, call list_directory on the project root first.` : ''}${opts.conversationSummary ? `
 ━━━ CONVERSATION SO FAR ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ${opts.conversationSummary}` : ''}`

@@ -144,30 +144,74 @@ export function Sidebar({ panel }: { panel: string }) {
 }
 
 function DNAView({ dna, loading }: { dna: any; loading: boolean }) {
+  const { setDNA, setInitializing, setInitialized, setInitError } = useDNAStore()
+  const { activeProject } = useProjectStore()
+
+  const resetDNA = useCallback(async () => {
+    if (!activeProject) return
+    setDNA(null)
+    setInitializing(true)
+    try {
+      const d = await dnaEngine.initialize(activeProject.rootPath)
+      setDNA(d)
+      setInitialized(true)
+    } catch (e) {
+      setInitError(String(e))
+    } finally {
+      setInitializing(false)
+    }
+  }, [activeProject, setDNA, setInitializing, setInitialized, setInitError])
+
   if (loading) return (
     <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', padding: 16 }}>
-      <div style={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 16, fontWeight: 600 }}>Analyzing DNA</div>
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+        <div style={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 600 }}>Analyzing DNA</div>
+      </div>
       {[80,65,90,55,75].map((w, i) => (
         <div key={i} style={{ height: 8, background: 'rgba(124,58,237,0.15)', borderRadius: 4, marginBottom: 8, width: `${w}%`, opacity: 0.7 }} />
       ))}
     </div>
   )
+
   if (!dna) return (
     <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.2)' }}>Open a project</span>
     </div>
   )
+
   return (
-    <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', overflowY: 'auto', padding: 12 }}>
-      <div style={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 2, marginBottom: 12, fontWeight: 600 }}>DNA</div>
-      <div style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: 4 }}>{dna.identity.systemName}</div>
-      <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.6, marginBottom: 16 }}>{dna.identity.corePurpose}</div>
-      {dna.systemLaws?.slice(0,6).map((l: any) => (
-        <div key={l.id} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
-          <span style={{ fontSize: 10, color: 'rgba(124,58,237,0.6)', fontFamily: 'monospace', flexShrink: 0 }}>{String(l.id).padStart(2,'0')}</span>
-          <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.5 }}>{l.rule}</span>
-        </div>
-      ))}
+    <div style={{ width: 220, flexShrink: 0, background: '#0a0b13', borderRight: '1px solid rgba(255,255,255,0.06)', overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      {/* Header with Reset button */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px 8px', borderBottom: '1px solid rgba(255,255,255,0.05)', flexShrink: 0 }}>
+        <span style={{ fontSize: 10, color: '#a78bfa', textTransform: 'uppercase', letterSpacing: 2, fontWeight: 600 }}>DNA</span>
+        <button
+          onClick={resetDNA}
+          title="Re-analyze project DNA"
+          style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.2)', padding: 3, borderRadius: 5, display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, fontFamily: 'inherit', transition: 'all 0.15s' }}
+          onMouseEnter={e => { (e.currentTarget as HTMLElement).style.color = '#a78bfa'; (e.currentTarget as HTMLElement).style.background = 'rgba(124,58,237,0.1)' }}
+          onMouseLeave={e => { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.2)'; (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+        >
+          {/* Refresh icon */}
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+            <polyline points="23 4 23 10 17 10"/>
+            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          Reset
+        </button>
+      </div>
+
+      {/* DNA content */}
+      <div style={{ flex: 1, overflowY: 'auto', padding: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.85)', marginBottom: 4 }}>{dna.identity.systemName}</div>
+        <div style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.6, marginBottom: 16 }}>{dna.identity.corePurpose}</div>
+        {dna.systemLaws?.slice(0,6).map((l: any) => (
+          <div key={l.id} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: 10, color: 'rgba(124,58,237,0.6)', fontFamily: 'monospace', flexShrink: 0 }}>{String(l.id).padStart(2,'0')}</span>
+            <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', lineHeight: 1.5 }}>{l.rule}</span>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

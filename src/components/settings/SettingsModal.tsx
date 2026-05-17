@@ -27,6 +27,32 @@ const S = {
   }
 }
 
+// Models available per provider
+const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = {
+  openrouter: [
+    { id: 'anthropic/claude-sonnet-4-5',       label: 'Claude Sonnet 4.5 (recommended)' },
+    { id: 'anthropic/claude-opus-4-5',         label: 'Claude Opus 4.5 (most capable)' },
+    { id: 'anthropic/claude-3-5-haiku',        label: 'Claude Haiku 3.5 (fastest)' },
+    { id: 'openai/gpt-4o',                     label: 'GPT-4o' },
+    { id: 'openai/gpt-4o-mini',                label: 'GPT-4o Mini' },
+    { id: 'openai/o3',                         label: 'o3 (reasoning)' },
+    { id: 'google/gemini-2.5-pro',             label: 'Gemini 2.5 Pro' },
+    { id: 'google/gemini-2.5-flash',           label: 'Gemini 2.5 Flash' },
+    { id: 'deepseek/deepseek-r1',              label: 'DeepSeek R1' },
+    { id: 'meta-llama/llama-3.3-70b-instruct', label: 'Llama 3.3 70B' },
+  ],
+  anthropic: [
+    { id: 'claude-sonnet-4-5',          label: 'Claude Sonnet 4.5 (recommended)' },
+    { id: 'claude-opus-4-5',            label: 'Claude Opus 4.5 (most capable)' },
+    { id: 'claude-3-5-haiku-20241022',  label: 'Claude Haiku 3.5 (fastest)' },
+  ],
+  openai: [
+    { id: 'gpt-4o',      label: 'GPT-4o (recommended)' },
+    { id: 'gpt-4o-mini', label: 'GPT-4o Mini (fast)' },
+    { id: 'o3',          label: 'o3 (reasoning)' },
+  ],
+}
+
 export function SettingsModal({ onClose }: Props) {
   const { settings, updateSettings, setConfigured } = useAIStore()
   const [keys, setKeys] = useState({
@@ -34,8 +60,16 @@ export function SettingsModal({ onClose }: Props) {
     anthropic: settings.providers.anthropic ?? '',
     openai: settings.providers.openai ?? ''
   })
+  const [preferredModel, setPreferredModel] = useState(settings.preferredModel || 'anthropic/claude-sonnet-4-5')
   const [saved, setSaved] = useState(false)
   const [tab, setTab] = useState<'providers' | 'editor' | 'governance'>('providers')
+
+  // Restore persisted model selection on mount
+  useEffect(() => {
+    window.api.store.get('preferredModel').then((m: any) => {
+      if (m && typeof m === 'string') setPreferredModel(m)
+    }).catch(() => {})
+  }, [])
 
   // On mount: prefer persisted keys from electron-store over env var
   useEffect(() => {
@@ -71,12 +105,13 @@ export function SettingsModal({ onClose }: Props) {
       : trimmed.anthropic ? 'anthropic'
       : trimmed.openai    ? 'openai'
       : settings.preferredProvider
-    updateSettings({ providers: trimmed, preferredProvider: preferred })
+    updateSettings({ providers: trimmed, preferredProvider: preferred, preferredModel })
     setConfigured(Object.values(trimmed).some(k => k.length > 0))
 
-    // Persist to electron-store so keys survive app restarts
+    // Persist keys + model selection so they survive app restarts
     await window.api.store.set('providers', trimmed).catch(() => {})
     await window.api.store.set('preferredProvider', preferred).catch(() => {})
+    await window.api.store.set('preferredModel', preferredModel).catch(() => {})
 
     setSaved(true)
     setTimeout(() => { setSaved(false); onClose() }, 800)
@@ -155,6 +190,25 @@ export function SettingsModal({ onClose }: Props) {
                     onChange={v => setKeys(k => ({ ...k, [id]: v }))}
                   />
                 ))}
+
+                {/* Model picker — dynamically shows models for the active provider */}
+                <div style={{ marginTop: 4 }}>
+                  <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <label style={{ fontSize: 12, color: 'rgba(255,255,255,0.5)', fontWeight: 500 }}>Preferred Model</label>
+                    <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)' }}>used for all agent tasks</span>
+                  </div>
+                  <select
+                    value={preferredModel}
+                    onChange={e => setPreferredModel(e.target.value)}
+                    style={{ width: '100%', background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(124,58,237,0.3)', borderRadius: 8, padding: '8px 10px', fontSize: 12, color: 'rgba(255,255,255,0.7)', outline: 'none', fontFamily: 'inherit' }}
+                  >
+                    {(() => {
+                      const activeProvider = keys.openrouter ? 'openrouter' : keys.anthropic ? 'anthropic' : keys.openai ? 'openai' : 'openrouter'
+                      const models = PROVIDER_MODELS[activeProvider] ?? PROVIDER_MODELS.openrouter
+                      return models.map(m => <option key={m.id} value={m.id}>{m.label}</option>)
+                    })()}
+                  </select>
+                </div>
               </div>
             )}
 

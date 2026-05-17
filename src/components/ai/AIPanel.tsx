@@ -337,6 +337,8 @@ export function AIPanel() {
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
   const [confirmPending, setConfirmPending] = useState<ConfirmPending | null>(null)
+  // Governance toggle — when off, skips pipeline and goes direct to agent
+  const [governanceOn, setGovernanceOn] = useState(true)
 
   // Conversation history for multi-turn memory (what gets sent back to the model)
   const historyRef = useRef<ChatCompletionMessageParam[]>([])
@@ -429,7 +431,7 @@ export function AIPanel() {
       return
     }
 
-    activeProject ? await withPipeline(text) : await withAgent(text)
+    activeProject && governanceOn ? await withPipeline(text) : await withAgent(text)
     setBusy(false)
   }, [input, busy, activeProject, dna, activeTab, settings])
 
@@ -730,6 +732,33 @@ export function AIPanel() {
 
       {/* Input */}
       <div style={{ padding: '10px 12px 14px', borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
+        {/* Governance toggle row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+          <button
+            onClick={() => setGovernanceOn(v => !v)}
+            title={governanceOn ? 'Governance ON — click to bypass pipeline' : 'Governance OFF — click to enable pipeline'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '3px 9px', borderRadius: 6, border: 'none', cursor: 'pointer',
+              background: governanceOn ? 'rgba(124,58,237,0.12)' : 'rgba(255,255,255,0.04)',
+              color: governanceOn ? 'rgba(167,139,250,0.75)' : 'rgba(255,255,255,0.2)',
+              fontSize: 10, fontFamily: 'inherit', fontWeight: 600,
+              transition: 'all 0.2s',
+              letterSpacing: 0.3
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '0.8' }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
+          >
+            {/* Shield icon */}
+            <svg width="10" height="10" viewBox="0 0 24 24" fill={governanceOn ? 'rgba(167,139,250,0.6)' : 'rgba(255,255,255,0.15)'} stroke="none">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            Laws {governanceOn ? 'ON' : 'OFF'}
+          </button>
+          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>
+            {activeProject ? (governanceOn ? '10-layer governance' : 'direct agent') : 'agent mode'}
+          </span>
+        </div>
         <div style={{ position: 'relative', background: 'rgba(255,255,255,0.04)', border: `1px solid ${busy ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.09)'}`, borderRadius: 12, transition: 'border-color 0.2s' }}>
           <textarea
             ref={taRef}

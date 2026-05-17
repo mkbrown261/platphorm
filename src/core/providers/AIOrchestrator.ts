@@ -33,9 +33,11 @@ export class AIOrchestrator {
   private providers: Map<ModelProvider, AIProviderInterface> = new Map()
   private preferredProvider: ModelProvider = 'openrouter'
   private fallbackOrder: ModelProvider[] = ['openrouter', 'anthropic', 'openai']
+  // User-selected model from Settings — overrides ROLE_MODEL_MAP for agent calls
+  private preferredModel: string | null = null
 
   configure(settings: Partial<AppSettings>): void {
-    const { providers, preferredProvider } = settings
+    const { providers, preferredProvider, preferredModel } = settings
 
     if (providers?.openrouter) {
       this.providers.set('openrouter', new OpenRouterProvider(providers.openrouter))
@@ -50,9 +52,12 @@ export class AIOrchestrator {
     if (preferredProvider) {
       this.preferredProvider = preferredProvider as ModelProvider
     }
+    if (preferredModel) {
+      this.preferredModel = preferredModel
+    }
   }
 
-  addProvider(config: ProviderConfig): void {
+  addProvider(config: ProviderConfig & { preferredModel?: string }): void {
     switch (config.provider) {
       case 'openrouter':
         this.providers.set('openrouter', new OpenRouterProvider(config.apiKey))
@@ -63,6 +68,9 @@ export class AIOrchestrator {
       case 'openai':
         this.providers.set('openai', new OpenAIProvider(config.apiKey))
         break
+    }
+    if (config.preferredModel) {
+      this.preferredModel = config.preferredModel
     }
   }
 
@@ -110,7 +118,8 @@ export class AIOrchestrator {
 
       const apiKey  = provider.apiKey ?? ''
       const baseURL = provider.baseURL ?? 'https://openrouter.ai/api/v1'
-      const model   = this.selectModel(role, providerName)
+      // Use the user's preferred model from Settings if set; fall back to role map
+      const model   = this.preferredModel ?? this.selectModel(role, providerName)
 
       if (!apiKey) continue
 
