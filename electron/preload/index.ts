@@ -24,6 +24,22 @@ const api = {
     set:    (key: string, value: unknown): Promise<{ success: boolean }> => ipcRenderer.invoke('store:set', key, value),
     delete: (key: string): Promise<{ success: boolean }>         => ipcRenderer.invoke('store:delete', key),
     getAll: (): Promise<Record<string, unknown>>                  => ipcRenderer.invoke('store:getAll')
+  },
+  // Live preview — spawns the project's dev server as a child process and
+  // returns the localhost URL so a WebView can point at it.
+  preview: {
+    start:  (projectPath: string): Promise<{ success: boolean; port?: number; url?: string; error?: string }> =>
+      ipcRenderer.invoke('preview:start', projectPath),
+    stop:   (projectPath: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('preview:stop', projectPath),
+    status: (projectPath: string): Promise<{ running: boolean; port?: number; url?: string }> =>
+      ipcRenderer.invoke('preview:status', projectPath)
+  },
+  // Shell utilities — electronAPI from @electron-toolkit/preload doesn't expose shell,
+  // so we route safe operations through IPC instead.
+  shell: {
+    openExternal: (url: string): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('shell:openExternal', url)
   }
 }
 

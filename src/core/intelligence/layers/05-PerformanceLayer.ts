@@ -107,6 +107,3 @@ Respond in JSON:
     }
   }
 }
-/)
-  return match ? match[0] : '{}'
-}

@@ -1,7 +1,8 @@
-import { useCallback } from 'react'
+import { useCallback, useState } from 'react'
 import { useProjectStore } from '../../store/projectStore'
 import { useAIStore } from '../../store/aiStore'
 import { MonacoEditor } from './MonacoEditor'
+import { PreviewPanel } from './PreviewPanel'
 
 const EXT_COLOR: Record<string, string> = {
   ts:'#3b82f6', tsx:'#3b82f6', js:'#eab308', jsx:'#60a5fa',
@@ -12,6 +13,7 @@ export function EditorArea() {
   const { openTabs, activeTabId, closeTab, setActiveTab, markTabClean } = useProjectStore()
   const { settings } = useAIStore()
   const activeTab = openTabs.find(t => t.id === activeTabId)
+  const [showPreview, setShowPreview] = useState(false)
 
   const handleSave = useCallback(async () => {
     if (!activeTab) return
@@ -63,20 +65,55 @@ export function EditorArea() {
             </div>
           )
         })}
+
+        {/* Preview toggle — right side of tab bar */}
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', paddingRight: 8, flexShrink: 0 }}>
+          <button
+            onClick={() => setShowPreview(v => !v)}
+            title={showPreview ? 'Hide preview' : 'Show live preview'}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              padding: '3px 10px', borderRadius: 6, border: 'none', cursor: 'pointer',
+              background: showPreview ? 'rgba(124,58,237,0.2)' : 'rgba(255,255,255,0.04)',
+              color: showPreview ? '#a78bfa' : 'rgba(255,255,255,0.35)',
+              fontSize: 11, fontFamily: 'inherit', transition: 'all 0.2s'
+            }}
+            onMouseEnter={e => { if (!showPreview) { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.65)' } }}
+            onMouseLeave={e => { if (!showPreview) { (e.currentTarget as HTMLElement).style.color = 'rgba(255,255,255,0.35)' } }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <rect x="2" y="3" width="20" height="18" rx="2"/><line x1="2" y1="9" x2="22" y2="9"/>
+            </svg>
+            Preview
+          </button>
+        </div>
       </div>
 
-      {/* Editor */}
-      <div style={{ flex: 1, overflow: 'hidden' }} onKeyDown={e => { if ((e.metaKey||e.ctrlKey) && e.key==='s') { e.preventDefault(); handleSave() } }}>
-        {activeTab && (
-          <MonacoEditor
-            key={activeTab.id}
-            tabId={activeTab.id}
-            filePath={activeTab.filePath}
-            content={activeTab.content}
-            language={activeTab.language}
-            fontSize={settings.fontSize}
-            fontFamily={settings.fontFamily}
-          />
+      {/* Editor + optional Preview split */}
+      <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }} onKeyDown={e => { if ((e.metaKey||e.ctrlKey) && e.key==='s') { e.preventDefault(); handleSave() } }}>
+        {/* Editor pane */}
+        <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+          {activeTab && (
+            <MonacoEditor
+              key={activeTab.id}
+              tabId={activeTab.id}
+              filePath={activeTab.filePath}
+              content={activeTab.content}
+              language={activeTab.language}
+              fontSize={settings.fontSize}
+              fontFamily={settings.fontFamily}
+            />
+          )}
+        </div>
+
+        {/* Preview pane */}
+        {showPreview && (
+          <>
+            <div style={{ width: 1, background: 'rgba(255,255,255,0.07)', flexShrink: 0 }} />
+            <div style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}>
+              <PreviewPanel />
+            </div>
+          </>
         )}
       </div>
     </div>
