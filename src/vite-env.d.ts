@@ -43,9 +43,10 @@ interface Window {
     }
     // ── Shell utilities ──────────────────────────────────────────────────────
     // NOTE: electronAPI from @electron-toolkit/preload does NOT expose shell.
-    // We use a safe IPC-based route for openExternal instead.
+    // We use safe IPC-based routes for all shell operations.
     shell: {
       openExternal: (url: string) => Promise<{ success: boolean; error?: string }>
+      runCommand: (cwd: string, command: string) => Promise<{ success: boolean; output?: string; error?: string }>
     }
   }
   electron: {

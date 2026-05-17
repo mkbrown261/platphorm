@@ -39,7 +39,12 @@ const api = {
   // so we route safe operations through IPC instead.
   shell: {
     openExternal: (url: string): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke('shell:openExternal', url)
+      ipcRenderer.invoke('shell:openExternal', url),
+    runCommand: (
+      cwd: string,
+      command: string
+    ): Promise<{ success: boolean; output?: string; error?: string }> =>
+      ipcRenderer.invoke('shell:runCommand', cwd, command)
   }
 }
 

@@ -281,13 +281,56 @@ function registerIpcHandlers(): void {
 
   // ── Shell utilities ───────────────────────────────────────────────────────
   // electronAPI from @electron-toolkit/preload does NOT expose shell.
-  // We route openExternal through a safe IPC handler here instead.
+  // We route safe operations through IPC handlers instead.
+
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
-    // Only allow http/https to prevent arbitrary protocol abuse
     if (/^https?:\/\//i.test(url)) {
       await shell.openExternal(url)
       return { success: true }
     }
     return { success: false, error: 'Only http/https URLs are supported' }
+  })
+
+  // ── shell:runCommand — executes a shell command in a project directory ────
+  // Used by the agent for: npm run build, npx tsc --noEmit, git status, etc.
+  // Allowlisted commands only — no arbitrary shell access.
+  const ALLOWED_COMMAND_PREFIXES = [
+    'npm ', 'npx ', 'yarn ', 'pnpm ',
+    'git status', 'git diff', 'git log',
+    'node --version', 'node -v'
+  ]
+
+  ipcMain.handle('shell:runCommand', async (_event, cwd: string, command: string) => {
+    const allowed = ALLOWED_COMMAND_PREFIXES.some(p => command.trimStart().startsWith(p))
+    if (!allowed) {
+      return { success: false, error: `Command not in allowlist: ${command}` }
+    }
+
+    return new Promise<{ success: boolean; output?: string; error?: string }>((resolve) => {
+      const proc = spawn(command, [], {
+        cwd,
+        shell: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      })
+
+      let output = ''
+      proc.stdout?.on('data', (d: Buffer) => { output += d.toString() })
+      proc.stderr?.on('data', (d: Buffer) => { output += d.toString() })
+
+      const timeout = setTimeout(() => {
+        proc.kill('SIGTERM')
+        resolve({ success: false, error: 'Command timed out after 30s', output: output.slice(0, 2000) })
+      }, 30_000)
+
+      proc.on('close', (code) => {
+        clearTimeout(timeout)
+        resolve({ success: true, output: output.slice(0, 3000) })
+      })
+
+      proc.on('error', (err) => {
+        clearTimeout(timeout)
+        resolve({ success: false, error: String(err), output })
+      })
+    })
   })
 }

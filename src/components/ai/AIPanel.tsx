@@ -450,7 +450,7 @@ export function AIPanel() {
     let assistantText = ''
 
     try {
-      for await (const event of runAgent(fullPrompt, sys, historyRef.current)) {
+      for await (const event of runAgent(fullPrompt, sys, historyRef.current, undefined, undefined)) {
         if (event.type === 'thinking_start') {
           // ThinkingOrb shows automatically via empty activity + busy
         } else if (event.type === 'stream_token') {
@@ -557,7 +557,7 @@ export function AIPanel() {
 
         let assistantText = ''
 
-        for await (const event of runAgent(prompt, sys, historyRef.current)) {
+        for await (const event of runAgent(prompt, sys, historyRef.current, undefined, activeProject!.rootPath)) {
           if (event.type === 'stream_token') {
             assistantText += event.token
             appendStreamToken(msgId, event.token)
