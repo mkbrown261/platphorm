@@ -487,7 +487,7 @@ export function AIPanel() {
 
     activeProject && governanceOn ? await withPipeline(text) : await withAgent(text)
     setBusy(false)
-  }, [input, busy, activeProject, dna, activeTab, settings])
+  }, [input, busy, activeProject, dna, activeTab, settings, governanceOn])
 
   // ── Agent mode (no project open) ─────────────────────────────────────────
 
