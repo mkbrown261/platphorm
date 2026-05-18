@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useCallback } from 'react'
 import type { ChatCompletionMessageParam } from 'openai/resources'
 import { useAIStore } from '../../store/aiStore'
 import { useDNAStore } from '../../store/dnaStore'
@@ -300,7 +300,7 @@ function ConfirmDialog({ pending, onDecide }: { pending: ConfirmPending; onDecid
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
 function renderMarkdown(text: string) {
-  // Split on code fences first
+  // Split on code fences first — preserve them as atomic blocks
   const parts = text.split(/(```[\s\S]*?```)/g)
   return parts.map((p, i) => {
     if (p.startsWith('```')) {
@@ -324,35 +324,56 @@ function renderMarkdown(text: string) {
       )
     }
     if (!p.trim()) return null
-    // Render task list lines: - [ ] and - [x]
+
+    // Process line-by-line so task items render correctly regardless of paragraph
+    // boundaries. This handles the case where the AI mixes prose + task lines in
+    // a single text block (no double-newline separator between them).
     const lines = p.split('\n')
-    const hasTasks = lines.some(l => /^- \[[ x]\]/.test(l.trim()))
-    if (hasTasks) {
-      return (
-        <div key={i} style={{ margin: '6px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {lines.filter(l => l.trim()).map((line, li) => {
-            const done    = /^- \[x\]/i.test(line.trim())
-            const pending = /^- \[ \]/.test(line.trim())
-            if (done || pending) {
-              const label = line.trim().replace(/^- \[[ x]\]\s*/i, '')
-              return (
-                <div key={li} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '4px 8px', borderRadius: 6, background: done ? 'rgba(34,197,94,0.05)' : 'rgba(255,255,255,0.03)', border: `1px solid ${done ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.06)'}` }}>
-                  <div style={{ width: 14, height: 14, borderRadius: 4, border: `1.5px solid ${done ? '#22c55e' : 'rgba(255,255,255,0.2)'}`, background: done ? 'rgba(34,197,94,0.2)' : 'transparent', flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    {done && <svg width="8" height="8" viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" stroke="#22c55e" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>}
-                  </div>
-                  <span style={{ fontSize: 12, color: done ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.75)', textDecoration: done ? 'line-through' : 'none', lineHeight: 1.5 }}>{label}</span>
-                </div>
-              )
-            }
-            const rendered = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-            return <p key={li} dangerouslySetInnerHTML={{ __html: rendered }} style={{ margin: '2px 0', fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.78)' }} />
-          })}
+    const elements: React.ReactNode[] = []
+    let taskGroup: { done: boolean; label: string }[] = []
+
+    const flushTaskGroup = (key: string) => {
+      if (!taskGroup.length) return
+      elements.push(
+        <div key={key} style={{ margin: '6px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {taskGroup.map((t, ti) => (
+            <div key={ti} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '4px 8px', borderRadius: 6, background: t.done ? 'rgba(34,197,94,0.05)' : 'rgba(255,255,255,0.03)', border: `1px solid ${t.done ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.06)'}` }}>
+              <div style={{ width: 14, height: 14, borderRadius: 4, border: `1.5px solid ${t.done ? '#22c55e' : 'rgba(255,255,255,0.2)'}`, background: t.done ? 'rgba(34,197,94,0.2)' : 'transparent', flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {t.done && <svg width="8" height="8" viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" stroke="#22c55e" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>}
+              </div>
+              <span style={{ fontSize: 12, color: t.done ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.75)', textDecoration: t.done ? 'line-through' : 'none', lineHeight: 1.5 }}>{t.label}</span>
+            </div>
+          ))}
         </div>
       )
+      taskGroup = []
     }
-    // Inline bold **text**
-    const rendered = p.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    return <p key={i} dangerouslySetInnerHTML={{ __html: rendered }} style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.78)', whiteSpace: 'pre-wrap' }} />
+
+    lines.forEach((line, li) => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+
+      const isDone    = /^- \[x\]/i.test(trimmed)
+      const isPending = /^- \[ \]/.test(trimmed)
+
+      if (isDone || isPending) {
+        const label = trimmed.replace(/^- \[[ x]\]\s*/i, '')
+        taskGroup.push({ done: isDone, label })
+      } else {
+        // Flush any accumulated task items before rendering a prose line
+        flushTaskGroup(`tg-${i}-${li}`)
+        const rendered = trimmed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        elements.push(
+          <p key={`l-${i}-${li}`} dangerouslySetInnerHTML={{ __html: rendered }}
+            style={{ margin: '2px 0', fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.78)' }} />
+        )
+      }
+    })
+
+    // Flush any trailing task group at end of segment
+    flushTaskGroup(`tg-${i}-end`)
+
+    return <div key={i}>{elements}</div>
   })
 }
 
