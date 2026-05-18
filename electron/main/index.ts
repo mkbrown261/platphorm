@@ -12,27 +12,58 @@ import Store from 'electron-store'
 const previewProcesses = new Map<string, { proc: ChildProcess; port: number; url: string }>()
 
 /** Detect the dev-script to run for a given project (npm run dev, yarn dev, etc.). */
-function detectDevCommand(projectPath: string): { cmd: string; args: string[] } {
-  const pkgPath = path.join(projectPath, 'package.json')
-  if (fs.existsSync(pkgPath)) {
+/**
+ * Find the best runnable project root — checks the given path first, then
+ * one level of subfolders. Returns the path + command to run, or null if
+ * nothing runnable is found anywhere.
+ */
+function findRunnableProject(projectPath: string): {
+  cwd: string; cmd: string; args: string[]
+} | null {
+  const PREFERRED = ['dev', 'start', 'serve', 'preview']
+
+  const tryPath = (dir: string): { cwd: string; cmd: string; args: string[] } | null => {
+    const pkgPath = path.join(dir, 'package.json')
+    if (!fs.existsSync(pkgPath)) return null
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
       const scripts: Record<string, string> = pkg.scripts ?? {}
-      // Prefer explicit dev/start scripts
-      const preferred = ['dev', 'start', 'serve', 'preview']
-      for (const name of preferred) {
+      for (const name of PREFERRED) {
         if (scripts[name]) {
-          const useYarn = fs.existsSync(path.join(projectPath, 'yarn.lock'))
-          const usePnpm = fs.existsSync(path.join(projectPath, 'pnpm-lock.yaml'))
+          const useYarn = fs.existsSync(path.join(dir, 'yarn.lock'))
+          const usePnpm = fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))
           const pm = useYarn ? 'yarn' : usePnpm ? 'pnpm' : 'npm'
-          return { cmd: pm, args: ['run', name] }
+          return { cwd: dir, cmd: pm, args: ['run', name] }
         }
       }
+      // package.json exists but no script — check for local vite binary
+      const viteLocal = path.join(dir, 'node_modules', '.bin', 'vite')
+      if (fs.existsSync(viteLocal)) return { cwd: dir, cmd: viteLocal, args: [] }
     } catch {}
+    return null
   }
-  // Fallback: vite if installed locally
-  const viteLocal = path.join(projectPath, 'node_modules', '.bin', 'vite')
-  if (fs.existsSync(viteLocal)) return { cmd: viteLocal, args: [] }
+
+  // 1. Try the root first
+  const root = tryPath(projectPath)
+  if (root) return root
+
+  // 2. Search one level of subfolders (website/, client/, app/, frontend/, etc.)
+  try {
+    const entries = fs.readdirSync(projectPath, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
+      const sub = tryPath(path.join(projectPath, entry.name))
+      if (sub) return sub
+    }
+  } catch {}
+
+  return null
+}
+
+function detectDevCommand(projectPath: string): { cmd: string; args: string[] } {
+  const result = findRunnableProject(projectPath)
+  if (result) return { cmd: result.cmd, args: result.args }
   return { cmd: 'npm', args: ['run', 'dev'] }
 }
 
@@ -220,10 +251,18 @@ function registerIpcHandlers(): void {
       previewProcesses.delete(projectPath)
     }
 
-    const { cmd, args } = detectDevCommand(projectPath)
+    const runnable = findRunnableProject(projectPath)
+    if (!runnable) {
+      return {
+        success: false,
+        error: 'No runnable project found. Make sure the project has a package.json with a "dev" or "start" script and dependencies are installed (npm install).'
+      }
+    }
+
+    const { cwd: runnableCwd, cmd, args } = runnable
 
     const proc = spawn(cmd, args, {
-      cwd: projectPath,
+      cwd: runnableCwd,
       env: {
         ...process.env,
         BROWSER: 'none',

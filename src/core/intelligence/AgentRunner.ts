@@ -662,6 +662,7 @@ These are not guidelines. They apply to every output without exception.
 8. **Do it yourself.** If the user needs a dependency installed, install it. If a file needs to be created, create it. Never hand off work you can do.
 9. **Verify your TypeScript.** After changes, run get_diagnostics. Fix errors before the user sees them.
 10. **Notice more than you're asked to.** Security holes, performance cliffs, broken patterns, missing pieces — surface them. Stay in your lane unless you see something that matters, then say so.
+11. **Every project must be runnable.** The root package.json MUST have a "dev" script. If you create a project, you create a complete one: package.json with scripts, all dependencies listed, index.html or entry point, everything needed to run with a single "npm run dev". A project the user can't run is not done.
 ${opts.systemLaws?.length ? `
 ━━━ PROJECT LAWS (NON-NEGOTIABLE) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
