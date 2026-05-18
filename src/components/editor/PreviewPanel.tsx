@@ -146,15 +146,17 @@ export function PreviewPanel() {
       {/* Content area */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {preview.status === 'running' && (
-          // Electron webview — renders the actual localhost dev server.
-          // The key forces a remount (full reload) when refresh is clicked.
-          <webview
+          // iframe pointing at the localhost dev server.
+          // More reliable than <webview> for localhost — avoids CSP/partition
+          // white screen issues that affect webview in certain Electron configs.
+          // The key forces a full remount (reload) when the refresh button is hit.
+          <iframe
             key={`${preview.url}-${refreshKey}`}
             ref={webviewRef}
             src={preview.url}
-            style={{ width: '100%', height: '100%', border: 'none' }}
-            // Allow the webview to load localhost URLs
-            webpreferences="allowRunningInsecureContent=yes, javascript=yes"
+            style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
+            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
+            title="Project Preview"
           />
         )}
 

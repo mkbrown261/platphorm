@@ -302,6 +302,74 @@ function ConfirmDialog({ pending, onDecide }: { pending: ConfirmPending; onDecid
   )
 }
 
+// ─── Laws confirmation dialog ─────────────────────────────────────────────────
+// Shown before the first pipeline run when Laws is ON, to prevent accidents.
+
+function LawsConfirmDialog({ onDecide }: { onDecide: (result: 'yes' | 'no' | 'never') => void }) {
+  return (
+    <div style={{
+      position: 'absolute', inset: 0, zIndex: 60,
+      background: 'rgba(8,9,15,0.92)', backdropFilter: 'blur(8px)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16,
+      animation: 'fadeIn 0.15s ease'
+    }}>
+      <div style={{
+        width: '100%', maxWidth: 310, background: '#0f1020',
+        border: '1px solid rgba(124,58,237,0.35)', borderRadius: 14, padding: 22,
+        boxShadow: '0 0 40px rgba(124,58,237,0.2)', display: 'flex', flexDirection: 'column', gap: 16
+      }}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(124,58,237,0.15)', border: '1px solid rgba(124,58,237,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" strokeWidth="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: 'rgba(255,255,255,0.88)' }}>Laws are ON</div>
+            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.3)' }}>Your prompt will run through governance</div>
+          </div>
+        </div>
+
+        {/* Body */}
+        <div style={{ fontSize: 12, color: 'rgba(255,255,255,0.45)', lineHeight: 1.65, padding: '10px 12px', background: 'rgba(124,58,237,0.05)', borderRadius: 8, border: '1px solid rgba(124,58,237,0.12)' }}>
+          With <strong style={{ color: 'rgba(167,139,250,0.75)' }}>Laws ON</strong>, every prompt passes through 10 governance layers before the agent writes any files. This is slower but safer.
+          <br /><br />
+          Want to use governance for this prompt?
+        </div>
+
+        {/* Buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+          <button
+            onClick={() => onDecide('yes')}
+            style={{ padding: '10px 0', borderRadius: 9, border: 'none', background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', color: 'white', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', fontWeight: 600, boxShadow: '0 0 14px rgba(124,58,237,0.3)' }}
+            onMouseEnter={e => { (e.currentTarget as any).style.boxShadow = '0 0 22px rgba(124,58,237,0.5)' }}
+            onMouseLeave={e => { (e.currentTarget as any).style.boxShadow = '0 0 14px rgba(124,58,237,0.3)' }}
+          >
+            Yes — use governance
+          </button>
+          <button
+            onClick={() => onDecide('no')}
+            style={{ padding: '10px 0', borderRadius: 9, border: '1px solid rgba(255,255,255,0.1)', background: 'rgba(255,255,255,0.04)', color: 'rgba(255,255,255,0.6)', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}
+            onMouseEnter={e => { (e.currentTarget as any).style.background = 'rgba(255,255,255,0.08)'; (e.currentTarget as any).style.color = 'rgba(255,255,255,0.82)' }}
+            onMouseLeave={e => { (e.currentTarget as any).style.background = 'rgba(255,255,255,0.04)'; (e.currentTarget as any).style.color = 'rgba(255,255,255,0.6)' }}
+          >
+            No — skip governance this time
+          </button>
+          <button
+            onClick={() => onDecide('never')}
+            style={{ padding: '8px 0', borderRadius: 9, border: 'none', background: 'transparent', color: 'rgba(255,255,255,0.22)', fontSize: 11, cursor: 'pointer', fontFamily: 'inherit' }}
+            onMouseEnter={e => { (e.currentTarget as any).style.color = 'rgba(255,255,255,0.5)' }}
+            onMouseLeave={e => { (e.currentTarget as any).style.color = 'rgba(255,255,255,0.22)' }}
+          >
+            Don't ask again
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
 function cleanStreamText(text: string): string {
@@ -430,6 +498,11 @@ export function AIPanel() {
   const [confirmPending, setConfirmPending] = useState<ConfirmPending | null>(null)
   // Governance toggle — when off, skips pipeline and goes direct to agent
   const [governanceOn, setGovernanceOn] = useState(true)
+  // Laws confirmation dialog — shown before first pipeline run to prevent accidents
+  const [lawsConfirmPending, setLawsConfirmPending] = useState<{
+    resolve: (result: 'yes' | 'no' | 'never') => void
+  } | null>(null)
+  const [lawsConfirmDisabled, setLawsConfirmDisabled] = useState(false)
   // Inline model picker
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
@@ -448,6 +521,13 @@ export function AIPanel() {
   const activeTab  = openTabs.find(t => t.id === activeTabId)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
+
+  // Load "don't ask again" Laws confirm preference from store on mount
+  useEffect(() => {
+    window.api?.store?.get('lawsConfirmDisabled').then((v: any) => {
+      if (v === true) setLawsConfirmDisabled(true)
+    }).catch(() => {})
+  }, [])
 
   // Close model picker when clicking outside
   useEffect(() => {
@@ -522,6 +602,24 @@ export function AIPanel() {
     setConfirmPending(null)
   }, [confirmPending])
 
+  // ── Laws confirmation prompt ──────────────────────────────────────────────
+  // Shown once (unless "don't ask again") when Laws is ON and user sends a prompt.
+  // Prevents accidentally running the governance pipeline.
+
+  const askLawsConfirm = useCallback((): Promise<'yes' | 'no' | 'never'> => {
+    return new Promise(resolve => setLawsConfirmPending({ resolve }))
+  }, [])
+
+  const handleLawsDecision = useCallback((result: 'yes' | 'no' | 'never') => {
+    if (!lawsConfirmPending) return
+    lawsConfirmPending.resolve(result)
+    setLawsConfirmPending(null)
+    if (result === 'never') {
+      setLawsConfirmDisabled(true)
+      window.api?.store?.set('lawsConfirmDisabled', true).catch(() => {})
+    }
+  }, [lawsConfirmPending])
+
   // ── Send ──────────────────────────────────────────────────────────────────
 
   const send = useCallback(async () => {
@@ -538,9 +636,21 @@ export function AIPanel() {
       return
     }
 
+    // If Laws is ON and project is open, ask for confirmation (unless disabled)
+    if (activeProject && governanceOn && !lawsConfirmDisabled) {
+      const decision = await askLawsConfirm()
+      if (decision === 'no') {
+        // Run without governance this time
+        await withAgent(text)
+        setBusy(false)
+        return
+      }
+      // 'yes' or 'never' — continue with pipeline
+    }
+
     activeProject && governanceOn ? await withPipeline(text) : await withAgent(text)
     setBusy(false)
-  }, [input, busy, activeProject, dna, activeTab, settings, governanceOn])
+  }, [input, busy, activeProject, dna, activeTab, settings, governanceOn, lawsConfirmDisabled, askLawsConfirm])
 
   // ── Agent mode (no project open) ─────────────────────────────────────────
 
@@ -714,6 +824,7 @@ export function AIPanel() {
   return (
     <div style={{ width: 340, flexShrink: 0, background: '#090a11', borderLeft: '1px solid rgba(255,255,255,0.07)', display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative' }}>
 
+      {lawsConfirmPending && <LawsConfirmDialog onDecide={handleLawsDecision} />}
       {confirmPending && <ConfirmDialog pending={confirmPending} onDecide={handleConfirmDecision} />}
 
       {/* Header */}

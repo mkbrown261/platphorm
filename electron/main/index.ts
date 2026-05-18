@@ -95,7 +95,7 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
-      webviewTag: true          // required for <webview> in PreviewPanel
+      webviewTag: false,        // using iframe instead of webview for preview
     }
   })
 
