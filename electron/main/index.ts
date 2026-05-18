@@ -41,10 +41,15 @@ function detectDevCommand(projectPath: string): { cmd: string; args: string[] } 
  * Vite prints:   "Local:   http://localhost:5173/"
  * Next.js prints: "ready - started server on ... url: http://localhost:3000"
  * CRA prints:    "Local:   http://localhost:3000"
- * We grab the first localhost/127.0.0.1 URL we see.
+ *
+ * Strip ANSI escape codes first — Vite uses colors which embed codes
+ * like \x1b[32m directly around the URL and break naive regex matching.
  */
 function parseUrlFromOutput(output: string): string | null {
-  const match = output.match(/https?:\/\/(localhost|127\.0\.0\.1):\d+[^\s\]"']*/i)
+  // Strip ANSI color/formatting codes
+  // eslint-disable-next-line no-control-regex
+  const clean = output.replace(/\x1b\[[0-9;]*[mGKHF]/g, '')
+  const match = clean.match(/https?:\/\/(localhost|127\.0\.0\.1):\d+\/?/i)
   return match ? match[0] : null
 }
 
@@ -219,18 +224,23 @@ function registerIpcHandlers(): void {
     })
 
     // Wait up to 30s for the dev server to print its URL to stdout/stderr.
-    // This is more reliable than port-polling because:
-    // - Vite, Next, CRA, and most dev servers print "Local: http://localhost:PORT"
-    // - The port is whatever the server actually chose, not what we guessed
+    // We watch all output and grab the first localhost URL we see.
+    // NOTE: do NOT resolve(null) on process 'exit' — when using shell:true,
+    // npm/yarn exits after handing off to vite/next/etc. The child process
+    // keeps running and its output still flows through the pipes.
+    // Only the deadline timeout or a spawn error should fail the wait.
     const result = await new Promise<{ url: string; port: number } | null>((resolve) => {
       const deadline = setTimeout(() => resolve(null), 30_000)
 
       let outputBuffer = ''
+      let resolved = false
 
       const onData = (data: Buffer) => {
+        if (resolved) return
         outputBuffer += data.toString()
         const url = parseUrlFromOutput(outputBuffer)
         if (url) {
+          resolved = true
           clearTimeout(deadline)
           proc.stdout?.off('data', onData)
           proc.stderr?.off('data', onData)
@@ -243,11 +253,9 @@ function registerIpcHandlers(): void {
       proc.stdout?.on('data', onData)
       proc.stderr?.on('data', onData)
 
-      proc.on('error', () => { clearTimeout(deadline); resolve(null) })
-      proc.on('exit', (code) => {
-        // Only fail if process exits before we found a URL
-        clearTimeout(deadline)
-        resolve(null)
+      // Only fail on a hard spawn error — not on exit (npm hands off to vite and exits)
+      proc.on('error', (err) => {
+        if (!resolved) { resolved = true; clearTimeout(deadline); resolve(null) }
       })
     })
 
