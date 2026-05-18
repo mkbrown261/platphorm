@@ -875,11 +875,6 @@ export async function* runAgent(
         messages,
         tools: TOOLS,
         tool_choice: 'auto',
-        // Disable parallel tool calls — forces sequential structured tool_calls field.
-        // Without this, some Claude models via OpenRouter fall back to their native
-        // Anthropic XML format (<function_calls>/<invoke>) in the content stream
-        // instead of emitting structured tool_calls deltas.
-        parallel_tool_calls: false,
         max_tokens: 8192,
         // 0.3 — precision over creativity for code editing and tool calls.
         // Tool execution (edit_file exact matching, path construction, TS fixes)
