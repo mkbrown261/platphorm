@@ -324,6 +324,32 @@ function renderMarkdown(text: string) {
       )
     }
     if (!p.trim()) return null
+    // Render task list lines: - [ ] and - [x]
+    const lines = p.split('\n')
+    const hasTasks = lines.some(l => /^- \[[ x]\]/.test(l.trim()))
+    if (hasTasks) {
+      return (
+        <div key={i} style={{ margin: '6px 0', display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {lines.filter(l => l.trim()).map((line, li) => {
+            const done    = /^- \[x\]/i.test(line.trim())
+            const pending = /^- \[ \]/.test(line.trim())
+            if (done || pending) {
+              const label = line.trim().replace(/^- \[[ x]\]\s*/i, '')
+              return (
+                <div key={li} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '4px 8px', borderRadius: 6, background: done ? 'rgba(34,197,94,0.05)' : 'rgba(255,255,255,0.03)', border: `1px solid ${done ? 'rgba(34,197,94,0.15)' : 'rgba(255,255,255,0.06)'}` }}>
+                  <div style={{ width: 14, height: 14, borderRadius: 4, border: `1.5px solid ${done ? '#22c55e' : 'rgba(255,255,255,0.2)'}`, background: done ? 'rgba(34,197,94,0.2)' : 'transparent', flexShrink: 0, marginTop: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    {done && <svg width="8" height="8" viewBox="0 0 12 12"><polyline points="2,6 5,9 10,3" stroke="#22c55e" strokeWidth="2" fill="none" strokeLinecap="round"/></svg>}
+                  </div>
+                  <span style={{ fontSize: 12, color: done ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.75)', textDecoration: done ? 'line-through' : 'none', lineHeight: 1.5 }}>{label}</span>
+                </div>
+              )
+            }
+            const rendered = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            return <p key={li} dangerouslySetInnerHTML={{ __html: rendered }} style={{ margin: '2px 0', fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.78)' }} />
+          })}
+        </div>
+      )
+    }
     // Inline bold **text**
     const rendered = p.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     return <p key={i} dangerouslySetInnerHTML={{ __html: rendered }} style={{ margin: '4px 0', fontSize: 13, lineHeight: 1.7, color: 'rgba(255,255,255,0.78)', whiteSpace: 'pre-wrap' }} />
@@ -332,6 +358,18 @@ function renderMarkdown(text: string) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
+// Available models for the inline picker
+const QUICK_MODELS = [
+  { id: 'anthropic/claude-sonnet-4-5', label: 'Claude Sonnet 4.5' },
+  { id: 'anthropic/claude-opus-4-5',   label: 'Claude Opus 4.5' },
+  { id: 'anthropic/claude-3-5-haiku',  label: 'Claude Haiku 3.5' },
+  { id: 'openai/gpt-4o',               label: 'GPT-4o' },
+  { id: 'openai/o3',                   label: 'o3' },
+  { id: 'google/gemini-2.5-pro',       label: 'Gemini 2.5 Pro' },
+  { id: 'google/gemini-2.5-flash',     label: 'Gemini 2.5 Flash' },
+  { id: 'deepseek/deepseek-r1',        label: 'DeepSeek R1' },
+]
+
 export function AIPanel() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
@@ -339,6 +377,11 @@ export function AIPanel() {
   const [confirmPending, setConfirmPending] = useState<ConfirmPending | null>(null)
   // Governance toggle — when off, skips pipeline and goes direct to agent
   const [governanceOn, setGovernanceOn] = useState(true)
+  // Inline model picker
+  const [showModelPicker, setShowModelPicker] = useState(false)
+  const [selectedModel, setSelectedModel] = useState<string | null>(null)
+  // Preview state
+  const [previewStarting, setPreviewStarting] = useState(false)
 
   // Conversation history for multi-turn memory (what gets sent back to the model)
   const historyRef = useRef<ChatCompletionMessageParam[]>([])
@@ -352,6 +395,17 @@ export function AIPanel() {
   const activeTab  = openTabs.find(t => t.id === activeTabId)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
+
+  // Close model picker when clicking outside
+  useEffect(() => {
+    if (!showModelPicker) return
+    const handler = (e: MouseEvent) => {
+      const target = e.target as HTMLElement
+      if (!target.closest('[data-model-picker]')) setShowModelPicker(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showModelPicker])
 
   const newId = () => `m${Date.now()}${Math.random().toString(36).slice(2)}`
 
@@ -733,26 +787,87 @@ export function AIPanel() {
 
       {/* Input */}
       <div style={{ padding: '10px 12px 14px', borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
-        {/* Governance toggle row — model indicator · Laws button · mode label */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
-          {/* Current model indicator */}
-          <span
-            title="Current model"
+        {/* Toolbar row: model picker · preview · Laws · mode label */}
+        <div data-model-picker style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 8, position: 'relative' }}>
+
+          {/* Model picker button */}
+          <button
+            onClick={() => setShowModelPicker(v => !v)}
+            title="Change model"
             style={{
-              flex: 1, minWidth: 0,
-              fontSize: 9, fontFamily: 'monospace',
-              color: 'rgba(167,139,250,0.45)',
-              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 4,
+              padding: '3px 8px', borderRadius: 6, border: '1px solid rgba(124,58,237,0.2)',
+              background: showModelPicker ? 'rgba(124,58,237,0.15)' : 'rgba(124,58,237,0.06)',
+              color: 'rgba(167,139,250,0.8)', fontSize: 10, fontFamily: 'monospace',
+              cursor: 'pointer', transition: 'all 0.2s', overflow: 'hidden'
             }}
+            onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(124,58,237,0.15)' }}
+            onMouseLeave={e => { if (!showModelPicker) (e.currentTarget as HTMLElement).style.background = 'rgba(124,58,237,0.06)' }}
           >
-            {(() => {
-              try {
-                const m = orchestrator.getProviderCredentials('general').model
-                // Shorten e.g. "anthropic/claude-sonnet-4-5" → "claude-sonnet-4-5"
-                return m.includes('/') ? m.split('/').slice(1).join('/') : m
-              } catch { return '' }
-            })()}
-          </span>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="3"/><path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/></svg>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {(() => {
+                const active = selectedModel ?? (() => { try { return orchestrator.getProviderCredentials('general').model } catch { return '' } })()
+                return active.includes('/') ? active.split('/').slice(1).join('/') : active
+              })()}
+            </span>
+            <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ flexShrink: 0, marginLeft: 'auto' }}><polyline points="6 9 12 15 18 9"/></svg>
+          </button>
+
+          {/* Model picker dropdown */}
+          {showModelPicker && (
+            <div style={{ position: 'absolute', bottom: '100%', left: 0, right: 0, marginBottom: 4, background: '#0d0e1a', border: '1px solid rgba(124,58,237,0.25)', borderRadius: 10, zIndex: 50, maxHeight: 220, overflowY: 'auto', boxShadow: '0 8px 32px rgba(0,0,0,0.7)' }}>
+              {QUICK_MODELS.map(m => (
+                <button key={m.id}
+                  onClick={() => {
+                    setSelectedModel(m.id)
+                    orchestrator.configure({ preferredModel: m.id })
+                    window.api.store.set('preferredModel', m.id).catch(() => {})
+                    setShowModelPicker(false)
+                  }}
+                  style={{ width: '100%', textAlign: 'left', display: 'block', padding: '8px 12px', fontSize: 11, fontFamily: 'monospace', color: (selectedModel ?? '') === m.id ? '#c4b5fd' : 'rgba(255,255,255,0.55)', background: 'transparent', border: 'none', cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.04)', transition: 'background 0.1s' }}
+                  onMouseEnter={e => (e.currentTarget as HTMLElement).style.background = 'rgba(124,58,237,0.1)'}
+                  onMouseLeave={e => (e.currentTarget as HTMLElement).style.background = 'transparent'}
+                >
+                  {m.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Preview button — launches dev server for active project */}
+          {activeProject && (
+            <button
+              onClick={async () => {
+                if (previewStarting) return
+                setPreviewStarting(true)
+                try {
+                  const r = await window.api.preview.start(activeProject.rootPath)
+                  if (r.success && r.url) {
+                    await window.api.shell.openExternal(r.url).catch(() => {})
+                  }
+                } catch {}
+                setPreviewStarting(false)
+              }}
+              title="Preview project in browser"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0,
+                padding: '3px 8px', borderRadius: 6, border: '1px solid rgba(34,197,94,0.2)',
+                background: 'rgba(34,197,94,0.06)', color: 'rgba(74,222,128,0.8)',
+                fontSize: 10, fontFamily: 'inherit', cursor: previewStarting ? 'wait' : 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(34,197,94,0.14)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(34,197,94,0.06)' }}
+            >
+              {previewStarting
+                ? <div style={{ width: 9, height: 9, border: '1.5px solid rgba(74,222,128,0.3)', borderTopColor: '#4ade80', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                : <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              }
+              Preview
+            </button>
+          )}
+
           {/* Laws toggle */}
           <button
             onClick={() => setGovernanceOn(v => !v)}
@@ -773,6 +888,7 @@ export function AIPanel() {
             </svg>
             Laws {governanceOn ? 'ON' : 'OFF'}
           </button>
+
           {/* Mode label */}
           <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace', flexShrink: 0 }}>
             {activeProject ? (governanceOn ? '10-layer' : 'direct') : 'agent'}
