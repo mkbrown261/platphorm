@@ -36,21 +36,33 @@ function detectDevCommand(projectPath: string): { cmd: string; args: string[] } 
   return { cmd: 'npm', args: ['run', 'dev'] }
 }
 
+/** Check if a TCP port is accepting connections on localhost */
+function isPortOpen(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const net = require('net')
+    const sock = net.createConnection({ port, host: '127.0.0.1' })
+    sock.setTimeout(300)
+    sock.on('connect', () => { sock.destroy(); resolve(true) })
+    sock.on('error', () => resolve(false))
+    sock.on('timeout', () => { sock.destroy(); resolve(false) })
+  })
+}
+
 /**
- * Parse a URL from dev server stdout.
- * Vite prints:   "Local:   http://localhost:5173/"
- * Next.js prints: "ready - started server on ... url: http://localhost:3000"
- * CRA prints:    "Local:   http://localhost:3000"
- *
- * Strip ANSI escape codes first — Vite uses colors which embed codes
- * like \x1b[32m directly around the URL and break naive regex matching.
+ * Poll a list of common dev-server ports until one responds or timeout.
+ * Returns the first open port, or null.
+ * Vite default: 5173. Next: 3000. CRA: 3000. Most others: 3000/8080/4000.
  */
-function parseUrlFromOutput(output: string): string | null {
-  // Strip ANSI color/formatting codes
-  // eslint-disable-next-line no-control-regex
-  const clean = output.replace(/\x1b\[[0-9;]*[mGKHF]/g, '')
-  const match = clean.match(/https?:\/\/(localhost|127\.0\.0\.1):\d+\/?/i)
-  return match ? match[0] : null
+async function detectOpenPort(timeoutMs: number): Promise<number | null> {
+  const PORTS = [5173, 3000, 3001, 4000, 4173, 8080, 8000, 8888, 5000, 5001, 4321]
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    for (const port of PORTS) {
+      if (await isPortOpen(port)) return port
+    }
+    await new Promise(r => setTimeout(r, 500))
+  }
+  return null
 }
 
 // Persistent settings store — lives in the OS user-data directory,
@@ -214,61 +226,34 @@ function registerIpcHandlers(): void {
       cwd: projectPath,
       env: {
         ...process.env,
-        // Tell dev servers not to auto-open a browser — we handle that
         BROWSER: 'none',
         VITE_OPEN: 'false',
         NEXT_TELEMETRY_DISABLED: '1'
       },
       shell: true,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: 'ignore'   // don't capture — just let it run
     })
 
-    // Wait up to 30s for the dev server to print its URL to stdout/stderr.
-    // We watch all output and grab the first localhost URL we see.
-    // NOTE: do NOT resolve(null) on process 'exit' — when using shell:true,
-    // npm/yarn exits after handing off to vite/next/etc. The child process
-    // keeps running and its output still flows through the pipes.
-    // Only the deadline timeout or a spawn error should fail the wait.
-    const result = await new Promise<{ url: string; port: number } | null>((resolve) => {
-      const deadline = setTimeout(() => resolve(null), 30_000)
+    proc.on('error', () => {})   // prevent unhandled error crashes
 
-      let outputBuffer = ''
-      let resolved = false
+    // Give the process 1.5s to start, then poll common ports every 500ms.
+    // This works regardless of what the server prints — Vite (5173), Next (3000),
+    // CRA (3000), Express, etc. We just find whatever port opened.
+    await new Promise(r => setTimeout(r, 1500))
 
-      const onData = (data: Buffer) => {
-        if (resolved) return
-        outputBuffer += data.toString()
-        const url = parseUrlFromOutput(outputBuffer)
-        if (url) {
-          resolved = true
-          clearTimeout(deadline)
-          proc.stdout?.off('data', onData)
-          proc.stderr?.off('data', onData)
-          const portMatch = url.match(/:(\d+)/)
-          const port = portMatch ? parseInt(portMatch[1], 10) : 3000
-          resolve({ url, port })
-        }
-      }
+    const port = await detectOpenPort(28_500)   // 1.5s already spent above = 30s total
 
-      proc.stdout?.on('data', onData)
-      proc.stderr?.on('data', onData)
-
-      // Only fail on a hard spawn error — not on exit (npm hands off to vite and exits)
-      proc.on('error', (err) => {
-        if (!resolved) { resolved = true; clearTimeout(deadline); resolve(null) }
-      })
-    })
-
-    if (!result) {
+    if (!port) {
       try { proc.kill('SIGTERM') } catch {}
       return {
         success: false,
-        error: 'Dev server did not print a URL within 30s. Make sure dependencies are installed (npm install) and the project has a dev script.'
+        error: 'Dev server did not start within 30s. Make sure npm install is complete and the project has a dev script in package.json.'
       }
     }
 
-    previewProcesses.set(projectPath, { proc, port: result.port, url: result.url })
-    return { success: true, port: result.port, url: result.url }
+    const url = `http://localhost:${port}`
+    previewProcesses.set(projectPath, { proc, port, url })
+    return { success: true, port, url }
   })
 
   // ── Live preview: stop dev server ─────────────────────────────────────────
