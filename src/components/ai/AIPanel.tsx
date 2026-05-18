@@ -863,11 +863,30 @@ export function AIPanel() {
                 if (previewStarting) return
                 setPreviewStarting(true)
                 try {
+                  // Check if already running first
+                  const status = await window.api.preview.status(activeProject.rootPath)
+                  if (status.running && status.url) {
+                    const ext = await window.api.shell.openExternal(status.url)
+                    if (!ext.success) {
+                      setMsgs(p => [...p, { id: newId(), role: 'system', content: `Preview: could not open browser — ${ext.error ?? 'unknown error'}` }])
+                    }
+                    setPreviewStarting(false)
+                    return
+                  }
+
+                  // Start the dev server
                   const r = await window.api.preview.start(activeProject.rootPath)
                   if (r.success && r.url) {
-                    await window.api.shell.openExternal(r.url).catch(() => {})
+                    const ext = await window.api.shell.openExternal(r.url)
+                    if (!ext.success) {
+                      setMsgs(p => [...p, { id: newId(), role: 'system', content: `Preview started at ${r.url} but could not open browser automatically. Open it manually.` }])
+                    }
+                  } else {
+                    setMsgs(p => [...p, { id: newId(), role: 'system', content: `Preview failed: ${r.error ?? 'Dev server did not start. Make sure the project has a dev script and dependencies are installed (npm install).'}` }])
                   }
-                } catch {}
+                } catch (err) {
+                  setMsgs(p => [...p, { id: newId(), role: 'system', content: `Preview error: ${String(err)}` }])
+                }
                 setPreviewStarting(false)
               }}
               title="Preview project in browser"
