@@ -299,9 +299,28 @@ function ConfirmDialog({ pending, onDecide }: { pending: ConfirmPending; onDecid
 
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
+function cleanStreamText(text: string): string {
+  // Strip XML-style tool call markup that some models (via OpenRouter) leak
+  // into the content stream instead of using the structured tool_calls field.
+  // Patterns: <function_calls>...</function_calls>, <invoke name="...">, <parameter>, etc.
+  return text
+    .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, '')
+    .replace(/<invoke[\s\S]*?<\/invoke>/g, '')
+    .replace(/<parameter[\s\S]*?<\/antml:parameter>/g, '')
+    .replace(/<function_calls>/g, '')
+    .replace(/<\/function_calls>/g, '')
+    .replace(/<invoke[^>]*>/g, '')
+    .replace(/<\/invoke>/g, '')
+    .replace(/<parameter[^>]*>/g, '')
+    .replace(/<\/antml:parameter>/g, '')
+    .trim()
+}
+
 function renderMarkdown(text: string) {
+  // Strip any leaked XML tool-call markup before rendering
+  const cleaned = cleanStreamText(text)
   // Split on code fences first — preserve them as atomic blocks
-  const parts = text.split(/(```[\s\S]*?```)/g)
+  const parts = cleaned.split(/(```[\s\S]*?```)/g)
   return parts.map((p, i) => {
     if (p.startsWith('```')) {
       const lines = p.slice(3, -3).split('\n')
@@ -552,14 +571,13 @@ export function AIPanel() {
       setMsgs(p => p.map(m => m.id === msgId ? { ...m, content: `Error: ${String(err)}` } : m))
     }
 
-    // Append to conversation history for next turn
+    // Append to conversation history for next turn — strip XML bleed before saving
     if (assistantText) {
       historyRef.current = [
         ...historyRef.current,
         { role: 'user', content: fullPrompt },
-        { role: 'assistant', content: assistantText }
+        { role: 'assistant', content: cleanStreamText(assistantText) }
       ]
-      // Keep history from growing unbounded — last 20 messages (10 turns)
       if (historyRef.current.length > 20) {
         historyRef.current = historyRef.current.slice(-20)
       }

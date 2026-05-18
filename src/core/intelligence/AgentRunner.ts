@@ -846,7 +846,6 @@ export async function* runAgent(
       }> = {}
 
       for await (const chunk of stream) {
-        // Abort during streaming — break out of chunk loop, let the outer loop catch it
         if (signal?.aborted) break
 
         const delta = chunk.choices?.[0]?.delta
@@ -861,11 +860,7 @@ export async function* runAgent(
           for (const tc of delta.tool_calls) {
             const idx = tc.index ?? 0
             if (!toolCallAccumulators[idx]) {
-              toolCallAccumulators[idx] = {
-                id: tc.id ?? '',
-                name: tc.function?.name ?? '',
-                arguments: ''
-              }
+              toolCallAccumulators[idx] = { id: tc.id ?? '', name: tc.function?.name ?? '', arguments: '' }
             }
             if (tc.id) toolCallAccumulators[idx].id = tc.id
             if (tc.function?.name) toolCallAccumulators[idx].name = tc.function.name
