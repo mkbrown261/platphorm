@@ -32,7 +32,7 @@ const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = {
   openrouter: [
     { id: 'anthropic/claude-sonnet-4.5',       label: 'Claude Sonnet 4.5 (recommended)' },
     { id: 'anthropic/claude-opus-4',           label: 'Claude Opus 4 (most capable)' },
-    { id: 'anthropic/claude-3-5-haiku',        label: 'Claude Haiku 3.5 (fastest)' },
+    { id: 'anthropic/claude-3.5-haiku',        label: 'Claude Haiku 3.5 (fastest)' },
     { id: 'openai/gpt-4o',                     label: 'GPT-4o' },
     { id: 'openai/gpt-4o-mini',                label: 'GPT-4o Mini' },
     { id: 'openai/o3',                         label: 'o3 (reasoning)' },

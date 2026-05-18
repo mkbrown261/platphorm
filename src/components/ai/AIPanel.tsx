@@ -415,7 +415,7 @@ function renderMarkdown(text: string) {
 const QUICK_MODELS = [
   { id: 'anthropic/claude-sonnet-4.5', label: 'Claude Sonnet 4.5' },
   { id: 'anthropic/claude-opus-4',      label: 'Claude Opus 4' },
-  { id: 'anthropic/claude-3-5-haiku',  label: 'Claude Haiku 3.5' },
+  { id: 'anthropic/claude-3.5-haiku',  label: 'Claude Haiku 3.5' },
   { id: 'openai/gpt-4o',               label: 'GPT-4o' },
   { id: 'openai/o3',                   label: 'o3' },
   { id: 'google/gemini-2.5-pro',       label: 'Gemini 2.5 Pro' },

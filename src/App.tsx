@@ -31,7 +31,21 @@ export default function App() {
         const providers = (stored.providers ?? {}) as Record<string, string>
         const preferred = (stored.preferredProvider as string) || 'openrouter'
 
-        const preferredModel = (stored.preferredModel as string) || 'anthropic/claude-sonnet-4.5'
+        // Migrate stale model IDs — old builds used hyphens, OpenRouter requires dots
+        const MODEL_MIGRATIONS: Record<string, string> = {
+          'anthropic/claude-sonnet-4-5': 'anthropic/claude-sonnet-4.5',
+          'anthropic/claude-opus-4-5':   'anthropic/claude-opus-4',
+          'anthropic/claude-opus-4.5':   'anthropic/claude-opus-4',
+          'anthropic/claude-3-5-haiku':  'anthropic/claude-3.5-haiku',
+        }
+        const rawModel = (stored.preferredModel as string) || 'anthropic/claude-sonnet-4.5'
+        const preferredModel = MODEL_MIGRATIONS[rawModel] ?? rawModel
+
+        // If the model was migrated, persist the correction immediately
+        if (preferredModel !== rawModel) {
+          window.api.store.set('preferredModel', preferredModel).catch(() => {})
+        }
+
         const hasAnyKey = Object.values(providers).some(k => !!k)
         if (hasAnyKey) {
           // Wire every persisted provider key + preferred into the orchestrator
