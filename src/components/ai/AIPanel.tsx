@@ -452,7 +452,7 @@ export function AIPanel() {
     let assistantText = ''
 
     try {
-      for await (const event of runAgent(fullPrompt, sys, historyRef.current, undefined, undefined)) {
+      for await (const event of runAgent(fullPrompt, sys, historyRef.current, undefined, activeProject?.rootPath)) {
         if (event.type === 'thinking_start') {
           // ThinkingOrb shows automatically via empty activity + busy
         } else if (event.type === 'stream_token') {

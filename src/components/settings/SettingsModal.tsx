@@ -97,14 +97,12 @@ export function SettingsModal({ onClose }: Props) {
       anthropic:  keys.anthropic.trim(),
       openai:     keys.openai.trim()
     }
-    // Register active providers with orchestrator
-    Object.entries(trimmed).forEach(([provider, key]) => {
-      if (key) orchestrator.addProvider({ provider: provider as any, apiKey: key })
-    })
+    // Configure orchestrator in one call — sets all providers + preferred model atomically
     const preferred = trimmed.openrouter ? 'openrouter'
       : trimmed.anthropic ? 'anthropic'
       : trimmed.openai    ? 'openai'
       : settings.preferredProvider
+    orchestrator.configure({ providers: trimmed, preferredProvider: preferred, preferredModel })
     updateSettings({ providers: trimmed, preferredProvider: preferred, preferredModel })
     setConfigured(Object.values(trimmed).some(k => k.length > 0))
 
