@@ -120,9 +120,6 @@ export function PreviewPanel() {
         <div style={styles.toolbarRight}>
           {preview.status === 'running' && (
             <>
-              <ToolBtn onClick={refresh} title="Refresh">
-                <RefreshIcon />
-              </ToolBtn>
               <ToolBtn onClick={openExternal} title="Open in browser">
                 <ExternalIcon />
               </ToolBtn>
@@ -146,18 +143,26 @@ export function PreviewPanel() {
       {/* Content area */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {preview.status === 'running' && (
-          // iframe pointing at the localhost dev server.
-          // More reliable than <webview> for localhost — avoids CSP/partition
-          // white screen issues that affect webview in certain Electron configs.
-          // The key forces a full remount (reload) when the refresh button is hit.
-          <iframe
-            key={`${preview.url}-${refreshKey}`}
-            ref={webviewRef}
-            src={preview.url}
-            style={{ width: '100%', height: '100%', border: 'none', display: 'block' }}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-pointer-lock"
-            title="Project Preview"
-          />
+          // Electron blocks cross-origin iframes (file:// → localhost:PORT).
+          // Show the URL with a prominent "Open in Browser" button instead —
+          // the system browser has no such restriction.
+          <div style={styles.placeholder}>
+            <div style={{ fontSize: 40, marginBottom: 8 }}>🚀</div>
+            <div style={styles.placeholderTitle}>Dev server running</div>
+            <div style={{ fontFamily: 'monospace', fontSize: 13, color: 'rgba(167,139,250,0.8)', background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', padding: '6px 14px', borderRadius: 8, marginTop: 4 }}>
+              {preview.url}
+            </div>
+            <div style={{ ...styles.placeholderDesc, marginTop: 6 }}>
+              Click below to open in your browser — hot reload works there too.
+            </div>
+            <button
+              onClick={() => window.api.shell.openExternal(preview.url).catch(() => {})}
+              style={{ ...styles.startBtnLarge, marginTop: 16 }}
+            >
+              <ExternalIcon />
+              Open in Browser
+            </button>
+          </div>
         )}
 
         {preview.status === 'idle' && (
