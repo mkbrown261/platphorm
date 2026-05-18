@@ -587,7 +587,7 @@ These fire automatically when you enter each domain. Not something you recite �
 □ Type safety — typed end-to-end from source to component?
 
 **TYPESCRIPT**
-□ No untyped `any` without a documented reason
+□ No untyped \`any\` without a documented reason
 □ Discriminated unions over boolean flag pairs
 □ Types exported alongside implementations
 □ Strict null checks — don't assume a value exists
