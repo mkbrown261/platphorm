@@ -86,9 +86,14 @@ function StreamCursor() {
 
 /** Streaming or completed text block */
 function StreamBlock({ item }: { item: Extract<ActivityItem, { kind: 'stream' }> }) {
+  // cleanStreamText is applied here (display layer only) as a last-resort guard
+  // against any Anthropic XML tool-call markup that leaked through the AgentRunner's
+  // XML suppression logic. It is NOT applied inside renderMarkdown itself — that
+  // would corrupt code blocks that legitimately contain XML syntax.
+  const displayText = cleanStreamText(item.text)
   return (
     <div style={{ fontSize: 13, color: 'rgba(255,255,255,0.82)', lineHeight: 1.7, whiteSpace: 'pre-wrap', animation: 'fadeIn 0.15s ease' }}>
-      {renderMarkdown(item.text)}
+      {renderMarkdown(displayText)}
       {!item.done && <StreamCursor />}
     </div>
   )
@@ -300,27 +305,35 @@ function ConfirmDialog({ pending, onDecide }: { pending: ConfirmPending; onDecid
 // ─── Markdown renderer ────────────────────────────────────────────────────────
 
 function cleanStreamText(text: string): string {
-  // Strip XML-style tool call markup that some models (via OpenRouter) leak
-  // into the content stream instead of using the structured tool_calls field.
-  // Patterns: <function_calls>...</function_calls>, <invoke name="...">, <parameter>, etc.
+  // Strip ALL variants of XML tool-call markup that Claude (via OpenRouter or direct)
+  // leaks into the content stream when it falls back to its native XML tool format.
+  // This covers: <function_calls>, <function_calls>, <invoke>, <invoke>,
+  // <parameter>, <parameter> — both complete blocks and partial/broken tags
+  // that appear during streaming before the closing tag has arrived.
   return text
+    // Complete blocks first (greedy strip)
+    .replace(/<function_calls>[\s\S]*?<\/antml:function_calls>/g, '')
     .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, '')
+    .replace(/<invoke[\s\S]*?<\/antml:invoke>/g, '')
     .replace(/<invoke[\s\S]*?<\/invoke>/g, '')
-    .replace(/<parameter[\s\S]*?<\/antml:parameter>/g, '')
-    .replace(/<function_calls>/g, '')
-    .replace(/<\/function_calls>/g, '')
-    .replace(/<invoke[^>]*>/g, '')
-    .replace(/<\/invoke>/g, '')
-    .replace(/<parameter[^>]*>/g, '')
-    .replace(/<\/antml:parameter>/g, '')
+    // Partial/open tags that haven't closed yet (mid-stream)
+    .replace(/<function_calls>[\s\S]*/g, '')
+    .replace(/<function_calls>[\s\S]*/g, '')
+    // Individual tags
+    .replace(/<\/?antml:function_calls[^>]*>/g, '')
+    .replace(/<\/?antml:invoke[^>]*>/g, '')
+    .replace(/<\/?antml:parameter[^>]*>/g, '')
+    .replace(/<\/?function_calls[^>]*>/g, '')
+    .replace(/<\/?invoke[^>]*>/g, '')
+    .replace(/<\/?parameter[^>]*>/g, '')
+    // Bare "antml:" prefix fragments that appear as broken tokens
+    .replace(/antml:[a-z_]+/g, '')
     .trim()
 }
 
 function renderMarkdown(text: string) {
-  // Strip any leaked XML tool-call markup before rendering
-  const cleaned = cleanStreamText(text)
   // Split on code fences first — preserve them as atomic blocks
-  const parts = cleaned.split(/(```[\s\S]*?```)/g)
+  const parts = text.split(/(```[\s\S]*?```)/g)
   return parts.map((p, i) => {
     if (p.startsWith('```')) {
       const lines = p.slice(3, -3).split('\n')
@@ -571,7 +584,9 @@ export function AIPanel() {
       setMsgs(p => p.map(m => m.id === msgId ? { ...m, content: `Error: ${String(err)}` } : m))
     }
 
-    // Append to conversation history for next turn — strip XML bleed before saving
+    // Append to conversation history for next turn.
+    // cleanStreamText strips any residual Anthropic XML markup from the assistant
+    // turn before it re-enters the context window — XML in history confuses models.
     if (assistantText) {
       historyRef.current = [
         ...historyRef.current,
@@ -671,12 +686,12 @@ export function AIPanel() {
           }
         }
 
-        // Thread into history
+        // Thread into history — strip any XML bleed before saving
         if (assistantText) {
           historyRef.current = [
             ...historyRef.current,
             { role: 'user', content: prompt },
-            { role: 'assistant', content: assistantText }
+            { role: 'assistant', content: cleanStreamText(assistantText) }
           ]
           if (historyRef.current.length > 20) historyRef.current = historyRef.current.slice(-20)
         }

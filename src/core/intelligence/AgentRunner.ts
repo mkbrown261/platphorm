@@ -767,6 +767,49 @@ export function compressHistory(history: ChatCompletionMessageParam[]): string {
     : 'Session in progress — no strong signals extracted yet.'
 }
 
+// ─── XML tool-call fallback parser ───────────────────────────────────────────
+//
+// Claude models via OpenRouter sometimes emit their native Anthropic XML tool-call
+// format in the content stream instead of structured tool_calls deltas.
+// These helpers parse that format and strip it from the display text.
+
+function parseXMLToolCalls(text: string): { id: string; name: string; arguments: string }[] {
+  const results: { id: string; name: string; arguments: string }[] = []
+  // Match both <invoke name="..."> and <invoke name="...">
+  const invokeRe = /<(?:antml:)?invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/(?:antml:)?invoke>/g
+  let invokeMatch: RegExpExecArray | null
+  while ((invokeMatch = invokeRe.exec(text)) !== null) {
+    const toolName = invokeMatch[1]
+    const body = invokeMatch[2]
+    // Parse parameters: <parameter name="key">value</parameter> (or antml: prefixed)
+    const args: Record<string, string> = {}
+    const paramRe = /<(?:antml:)?parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/(?:antml:)?parameter>/g
+    let paramMatch: RegExpExecArray | null
+    while ((paramMatch = paramRe.exec(body)) !== null) {
+      args[paramMatch[1]] = paramMatch[2].trim()
+    }
+    results.push({
+      id: `xml-${Date.now()}-${results.length}`,
+      name: toolName,
+      arguments: JSON.stringify(args)
+    })
+  }
+  return results
+}
+
+function stripXMLToolCalls(text: string): string {
+  return text
+    // Full function_calls blocks (both namespaced and plain)
+    .replace(/<(?:antml:)?function_calls>[\s\S]*?<\/(?:antml:)?function_calls>/g, '')
+    // Orphaned invoke blocks (if function_calls wrapper was malformed)
+    .replace(/<(?:antml:)?invoke[\s\S]*?<\/(?:antml:)?invoke>/g, '')
+    // Any leftover individual tags
+    .replace(/<\/?(?:antml:)?(?:function_calls|invoke|parameter)[^>]*>/g, '')
+    // Bare "antml:" fragment tokens (incomplete streaming)
+    .replace(/antml:[a-z_]+/g, '')
+    .trim()
+}
+
 // ─── Agentic loop with streaming ──────────────────────────────────────────────
 
 export async function* runAgent(
@@ -832,6 +875,11 @@ export async function* runAgent(
         messages,
         tools: TOOLS,
         tool_choice: 'auto',
+        // Disable parallel tool calls — forces sequential structured tool_calls field.
+        // Without this, some Claude models via OpenRouter fall back to their native
+        // Anthropic XML format (<function_calls>/<invoke>) in the content stream
+        // instead of emitting structured tool_calls deltas.
+        parallel_tool_calls: false,
         max_tokens: 8192,
         // 0.3 — precision over creativity for code editing and tool calls.
         // Tool execution (edit_file exact matching, path construction, TS fixes)
@@ -845,6 +893,12 @@ export async function* runAgent(
         id: string; name: string; arguments: string
       }> = {}
 
+      // Track whether we're inside an Anthropic XML tool-call block so we can
+      // suppress those tokens from the UI stream. The block starts on the first
+      // token that contains <function_calls> (or <function_calls>) and ends
+      // after the closing </function_calls> (or </function_calls>) token.
+      let insideXMLBlock = false
+
       for await (const chunk of stream) {
         if (signal?.aborted) break
 
@@ -852,7 +906,17 @@ export async function* runAgent(
 
         if (delta?.content) {
           fullText += delta.content
-          yield { type: 'stream_token', token: delta.content }
+
+          // Detect XML tool-call block boundaries mid-stream and suppress those tokens
+          if (!insideXMLBlock && /(<function_calls>|<function_calls>)/.test(delta.content)) {
+            insideXMLBlock = true
+          }
+          if (!insideXMLBlock) {
+            yield { type: 'stream_token', token: delta.content }
+          }
+          if (insideXMLBlock && /(<\/function_calls>|<\/function_calls>)/.test(fullText)) {
+            insideXMLBlock = false
+          }
         }
 
         if (delta?.tool_calls) {
@@ -878,7 +942,23 @@ export async function* runAgent(
         return
       }
 
-      const toolCalls = Object.values(toolCallAccumulators)
+      let toolCalls = Object.values(toolCallAccumulators)
+
+      // ── XML fallback parser ────────────────────────────────────────────────
+      // Some Claude models via OpenRouter still emit their native Anthropic XML
+      // tool-call format in the content stream even with parallel_tool_calls:false.
+      // Detect this: if the stream text contains <function_calls> (or the namespaced
+      // <function_calls>) and we have no structured tool_calls, parse the XML
+      // manually so tools still fire — and strip the raw XML from the displayed text.
+      if (!hasToolCalls && /(<function_calls>|<function_calls>)/.test(fullText)) {
+        const xmlCalls = parseXMLToolCalls(fullText)
+        if (xmlCalls.length > 0) {
+          toolCalls = xmlCalls
+          hasToolCalls = true
+          // Strip the XML block from the text shown in the UI bubble
+          fullText = stripXMLToolCalls(fullText)
+        }
+      }
 
       if (fullText.trim()) {
         yield { type: 'thinking_done', text: fullText.trim() }
