@@ -18,13 +18,13 @@ import { OpenRouterProvider } from './OpenRouterProvider'
 // kept consistent with provider list declarations in OpenRouterProvider.ts.
 // Anthropic/OpenAI direct-provider IDs are resolved in selectModel() below.
 const ROLE_MODEL_MAP: Record<ModelRole, string> = {
-  architect:   'anthropic/claude-opus-4-5',   // best reasoning for architecture decisions
-  security:    'anthropic/claude-opus-4-5',   // highest trust for security analysis
-  backend:     'anthropic/claude-sonnet-4-5',
-  frontend:    'anthropic/claude-sonnet-4-5',
-  refactor:    'anthropic/claude-sonnet-4-5',
+  architect:   'anthropic/claude-opus-4',     // best reasoning for architecture decisions
+  security:    'anthropic/claude-opus-4',     // highest trust for security analysis
+  backend:     'anthropic/claude-sonnet-4.5',
+  frontend:    'anthropic/claude-sonnet-4.5',
+  refactor:    'anthropic/claude-sonnet-4.5',
   performance: 'google/gemini-2.5-pro',       // 1M context, strong at analysis
-  general:     'anthropic/claude-sonnet-4-5',
+  general:     'anthropic/claude-sonnet-4.5',
   validation:  'deepseek/deepseek-r1',        // reasoning model, cost-effective
   continuity:  'google/gemini-2.5-pro'
 }
@@ -79,17 +79,15 @@ export class AIOrchestrator {
       return ROLE_MODEL_MAP[role] ?? ROLE_MODEL_MAP.general
     }
     if (provider === 'anthropic') {
-      // FIX: use consistent Anthropic model IDs (no openrouter prefix)
+      // Direct Anthropic API IDs (no openrouter prefix, dots not hyphens)
       return role === 'architect' || role === 'security'
-        ? 'claude-opus-4-5'
-        : role === 'performance' || role === 'continuity'
-          ? 'claude-sonnet-4-5'   // Gemini unavailable on direct Anthropic
-          : 'claude-sonnet-4-5'
+        ? 'claude-opus-4-0'
+        : 'claude-sonnet-4-5'   // direct Anthropic API uses hyphen format
     }
     if (provider === 'openai') {
       return role === 'architect' || role === 'security' ? 'o3' : 'gpt-4o'
     }
-    return 'anthropic/claude-sonnet-4-5'
+    return 'anthropic/claude-sonnet-4.5'
   }
 
   private getProvider(name: ModelProvider): AIProviderInterface | null {

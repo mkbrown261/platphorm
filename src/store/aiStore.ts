@@ -23,7 +23,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
   providers: {},
   preferredProvider: 'openrouter',
-  preferredModel: 'anthropic/claude-sonnet-4-5',
+  preferredModel: 'anthropic/claude-sonnet-4.5',
   autoRunPipeline: false,
   pipelineOnSave: false,
   governanceStrictMode: false

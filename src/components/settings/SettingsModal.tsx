@@ -30,8 +30,8 @@ const S = {
 // Models available per provider
 const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = {
   openrouter: [
-    { id: 'anthropic/claude-sonnet-4-5',       label: 'Claude Sonnet 4.5 (recommended)' },
-    { id: 'anthropic/claude-opus-4-5',         label: 'Claude Opus 4.5 (most capable)' },
+    { id: 'anthropic/claude-sonnet-4.5',       label: 'Claude Sonnet 4.5 (recommended)' },
+    { id: 'anthropic/claude-opus-4',           label: 'Claude Opus 4 (most capable)' },
     { id: 'anthropic/claude-3-5-haiku',        label: 'Claude Haiku 3.5 (fastest)' },
     { id: 'openai/gpt-4o',                     label: 'GPT-4o' },
     { id: 'openai/gpt-4o-mini',                label: 'GPT-4o Mini' },
@@ -43,7 +43,7 @@ const PROVIDER_MODELS: Record<string, { id: string; label: string }[]> = {
   ],
   anthropic: [
     { id: 'claude-sonnet-4-5',          label: 'Claude Sonnet 4.5 (recommended)' },
-    { id: 'claude-opus-4-5',            label: 'Claude Opus 4.5 (most capable)' },
+    { id: 'claude-opus-4-0',            label: 'Claude Opus 4 (most capable)' },
     { id: 'claude-3-5-haiku-20241022',  label: 'Claude Haiku 3.5 (fastest)' },
   ],
   openai: [
@@ -60,7 +60,7 @@ export function SettingsModal({ onClose }: Props) {
     anthropic: settings.providers.anthropic ?? '',
     openai: settings.providers.openai ?? ''
   })
-  const [preferredModel, setPreferredModel] = useState(settings.preferredModel || 'anthropic/claude-sonnet-4-5')
+  const [preferredModel, setPreferredModel] = useState(settings.preferredModel || 'anthropic/claude-sonnet-4.5')
   const [saved, setSaved] = useState(false)
   const [tab, setTab] = useState<'providers' | 'editor' | 'governance'>('providers')
 

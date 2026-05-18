@@ -31,7 +31,7 @@ export default function App() {
         const providers = (stored.providers ?? {}) as Record<string, string>
         const preferred = (stored.preferredProvider as string) || 'openrouter'
 
-        const preferredModel = (stored.preferredModel as string) || 'anthropic/claude-sonnet-4-5'
+        const preferredModel = (stored.preferredModel as string) || 'anthropic/claude-sonnet-4.5'
         const hasAnyKey = Object.values(providers).some(k => !!k)
         if (hasAnyKey) {
           // Wire every persisted provider key + preferred into the orchestrator
