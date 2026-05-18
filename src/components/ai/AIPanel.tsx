@@ -442,6 +442,7 @@ export function AIPanel() {
     setMsgs(p => [...p, { id: msgId, role: 'assistant', activity: [] }])
 
     const sys = buildAgentSystemPrompt({
+      projectPath: activeProject?.rootPath,
       systemName: dna?.identity?.systemName,
       corePurpose: dna?.identity?.corePurpose,
       systemLaws: dna?.systemLaws?.map((l: any) => l.rule) ?? [],
