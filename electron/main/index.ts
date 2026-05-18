@@ -9,21 +9,7 @@ import Store from 'electron-store'
 
 // ── Preview dev-server process registry ──────────────────────────────────────
 // Tracks one running dev server per project root path.
-const previewProcesses = new Map<string, { proc: ChildProcess; port: number }>()
-
-/** Find a free TCP port in the 3100-4200 range. */
-async function findFreePort(start = 3100): Promise<number> {
-  const net = await import('net')
-  return new Promise((resolve, reject) => {
-    const server = net.createServer()
-    server.unref()
-    server.on('error', () => resolve(findFreePort(start + 1)))
-    server.listen(start, '127.0.0.1', () => {
-      const addr = server.address() as any
-      server.close(() => resolve(addr.port))
-    })
-  })
-}
+const previewProcesses = new Map<string, { proc: ChildProcess; port: number; url: string }>()
 
 /** Detect the dev-script to run for a given project (npm run dev, yarn dev, etc.). */
 function detectDevCommand(projectPath: string): { cmd: string; args: string[] } {
@@ -48,6 +34,18 @@ function detectDevCommand(projectPath: string): { cmd: string; args: string[] } 
   const viteLocal = path.join(projectPath, 'node_modules', '.bin', 'vite')
   if (fs.existsSync(viteLocal)) return { cmd: viteLocal, args: [] }
   return { cmd: 'npm', args: ['run', 'dev'] }
+}
+
+/**
+ * Parse a URL from dev server stdout.
+ * Vite prints:   "Local:   http://localhost:5173/"
+ * Next.js prints: "ready - started server on ... url: http://localhost:3000"
+ * CRA prints:    "Local:   http://localhost:3000"
+ * We grab the first localhost/127.0.0.1 URL we see.
+ */
+function parseUrlFromOutput(output: string): string | null {
+  const match = output.match(/https?:\/\/(localhost|127\.0\.0\.1):\d+[^\s\]"']*/i)
+  return match ? match[0] : null
 }
 
 // Persistent settings store — lives in the OS user-data directory,
@@ -201,58 +199,68 @@ function registerIpcHandlers(): void {
     // Kill any existing server for this project
     const existing = previewProcesses.get(projectPath)
     if (existing) {
-      existing.proc.kill('SIGTERM')
+      try { existing.proc.kill('SIGTERM') } catch {}
       previewProcesses.delete(projectPath)
     }
 
-    const port = await findFreePort()
     const { cmd, args } = detectDevCommand(projectPath)
-
-    const env = {
-      ...process.env,
-      PORT: String(port),
-      VITE_PORT: String(port),
-      // Tell vite/CRA/etc. to use the assigned port and not open a browser
-      BROWSER: 'none',
-      VITE_OPEN: 'false'
-    }
 
     const proc = spawn(cmd, args, {
       cwd: projectPath,
-      env,
+      env: {
+        ...process.env,
+        // Tell dev servers not to auto-open a browser — we handle that
+        BROWSER: 'none',
+        VITE_OPEN: 'false',
+        NEXT_TELEMETRY_DISABLED: '1'
+      },
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe']
     })
 
-    previewProcesses.set(projectPath, { proc, port })
+    // Wait up to 30s for the dev server to print its URL to stdout/stderr.
+    // This is more reliable than port-polling because:
+    // - Vite, Next, CRA, and most dev servers print "Local: http://localhost:PORT"
+    // - The port is whatever the server actually chose, not what we guessed
+    const result = await new Promise<{ url: string; port: number } | null>((resolve) => {
+      const deadline = setTimeout(() => resolve(null), 30_000)
 
-    // Wait up to 20s for the dev server to become reachable
-    const ready = await new Promise<boolean>((resolve) => {
-      const deadline = setTimeout(() => resolve(false), 20_000)
-      const check = async () => {
-        try {
-          const net = await import('net')
-          const sock = net.createConnection({ port, host: '127.0.0.1' })
-          sock.on('connect', () => { sock.destroy(); clearTimeout(deadline); resolve(true) })
-          sock.on('error', () => setTimeout(check, 400))
-        } catch {
-          setTimeout(check, 400)
+      let outputBuffer = ''
+
+      const onData = (data: Buffer) => {
+        outputBuffer += data.toString()
+        const url = parseUrlFromOutput(outputBuffer)
+        if (url) {
+          clearTimeout(deadline)
+          proc.stdout?.off('data', onData)
+          proc.stderr?.off('data', onData)
+          const portMatch = url.match(/:(\d+)/)
+          const port = portMatch ? parseInt(portMatch[1], 10) : 3000
+          resolve({ url, port })
         }
       }
-      // Give the process 1s to start before polling
-      setTimeout(check, 1000)
 
-      proc.on('error', () => { clearTimeout(deadline); resolve(false) })
-      proc.on('exit', () => { clearTimeout(deadline); resolve(false) })
+      proc.stdout?.on('data', onData)
+      proc.stderr?.on('data', onData)
+
+      proc.on('error', () => { clearTimeout(deadline); resolve(null) })
+      proc.on('exit', (code) => {
+        // Only fail if process exits before we found a URL
+        clearTimeout(deadline)
+        resolve(null)
+      })
     })
 
-    if (!ready) {
-      proc.kill('SIGTERM')
-      previewProcesses.delete(projectPath)
-      return { success: false, error: 'Dev server did not start within 20s. Is npm install complete?' }
+    if (!result) {
+      try { proc.kill('SIGTERM') } catch {}
+      return {
+        success: false,
+        error: 'Dev server did not print a URL within 30s. Make sure dependencies are installed (npm install) and the project has a dev script.'
+      }
     }
 
-    return { success: true, port, url: `http://localhost:${port}` }
+    previewProcesses.set(projectPath, { proc, port: result.port, url: result.url })
+    return { success: true, port: result.port, url: result.url }
   })
 
   // ── Live preview: stop dev server ─────────────────────────────────────────
@@ -269,7 +277,7 @@ function registerIpcHandlers(): void {
   ipcMain.handle('preview:status', async (_event, projectPath: string) => {
     const existing = previewProcesses.get(projectPath)
     if (!existing) return { running: false }
-    return { running: true, port: existing.port, url: `http://localhost:${existing.port}` }
+    return { running: true, port: existing.port, url: existing.url }
   })
 
   // Kill all preview servers on app quit
