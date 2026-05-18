@@ -732,31 +732,49 @@ export function AIPanel() {
 
       {/* Input */}
       <div style={{ padding: '10px 12px 14px', borderTop: '1px solid rgba(255,255,255,0.06)', flexShrink: 0 }}>
-        {/* Governance toggle row */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+        {/* Governance toggle row — model indicator · Laws button · mode label */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+          {/* Current model indicator */}
+          <span
+            title="Current model"
+            style={{
+              flex: 1, minWidth: 0,
+              fontSize: 9, fontFamily: 'monospace',
+              color: 'rgba(167,139,250,0.45)',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            {(() => {
+              try {
+                const m = orchestrator.getProviderCredentials('general').model
+                // Shorten e.g. "anthropic/claude-sonnet-4-5" → "claude-sonnet-4-5"
+                return m.includes('/') ? m.split('/').slice(1).join('/') : m
+              } catch { return '' }
+            })()}
+          </span>
+          {/* Laws toggle */}
           <button
             onClick={() => setGovernanceOn(v => !v)}
             title={governanceOn ? 'Governance ON — click to bypass pipeline' : 'Governance OFF — click to enable pipeline'}
             style={{
-              display: 'flex', alignItems: 'center', gap: 5,
+              display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0,
               padding: '3px 9px', borderRadius: 6, border: 'none', cursor: 'pointer',
               background: governanceOn ? 'rgba(124,58,237,0.12)' : 'rgba(255,255,255,0.04)',
               color: governanceOn ? 'rgba(167,139,250,0.75)' : 'rgba(255,255,255,0.2)',
               fontSize: 10, fontFamily: 'inherit', fontWeight: 600,
-              transition: 'all 0.2s',
-              letterSpacing: 0.3
+              transition: 'all 0.2s', letterSpacing: 0.3
             }}
             onMouseEnter={e => { (e.currentTarget as HTMLElement).style.opacity = '0.8' }}
             onMouseLeave={e => { (e.currentTarget as HTMLElement).style.opacity = '1' }}
           >
-            {/* Shield icon */}
             <svg width="10" height="10" viewBox="0 0 24 24" fill={governanceOn ? 'rgba(167,139,250,0.6)' : 'rgba(255,255,255,0.15)'} stroke="none">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
             </svg>
             Laws {governanceOn ? 'ON' : 'OFF'}
           </button>
-          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace' }}>
-            {activeProject ? (governanceOn ? '10-layer governance' : 'direct agent') : 'agent mode'}
+          {/* Mode label */}
+          <span style={{ fontSize: 9, color: 'rgba(255,255,255,0.12)', fontFamily: 'monospace', flexShrink: 0 }}>
+            {activeProject ? (governanceOn ? '10-layer' : 'direct') : 'agent'}
           </span>
         </div>
         <div style={{ position: 'relative', background: 'rgba(255,255,255,0.04)', border: `1px solid ${busy ? 'rgba(124,58,237,0.3)' : 'rgba(255,255,255,0.09)'}`, borderRadius: 12, transition: 'border-color 0.2s' }}>
