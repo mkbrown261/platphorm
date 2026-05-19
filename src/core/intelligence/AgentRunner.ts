@@ -39,7 +39,7 @@ const TOOLS: ChatCompletionTool[] = [
     type: 'function',
     function: {
       name: 'list_directory',
-      description: 'List files and folders in a directory. Call this first on the project root, then drill into subdirectories that matter. Before calling, ask yourself: what am I expecting to find here, and what will I do with the result?',
+      description: 'List files and folders in a directory. ALWAYS call this on the project root before reading or editing any file. Never guess or assume a file path — list the directory first, then navigate to what actually exists. If you get a read_file or edit_file error saying a file was not found, it means you guessed the path wrong. Call list_directory to find the real path.',
       parameters: {
         type: 'object',
         properties: { path: { type: 'string', description: 'Absolute directory path' } },
@@ -280,7 +280,11 @@ async function executeTool(
     case 'read_file': {
       const path = resolvePath(args.path, projectPath)
       const c = await window.api.fs.readFile(path)
-      return c ?? '(empty or not found)'
+      if (c == null) throw new Error(
+        `read_file: file not found: ${path}\n` +
+        `Do not guess paths. Call list_directory on the project root first to see what actually exists.`
+      )
+      return c
     }
 
     case 'write_file': {
