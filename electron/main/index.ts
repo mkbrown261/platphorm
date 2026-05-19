@@ -14,11 +14,11 @@ const previewProcesses = new Map<string, { proc: ChildProcess; port: number; url
 /**
  * Run `npm install` in a directory and wait for it to finish.
  * Used by preview:start to auto-install deps before starting the dev server.
- * Timeout: 3 minutes — enough for a cold install of a large project.
+ * Timeout: 60s — --prefer-offline + --no-audit + --no-fund hits local cache fast.
  */
 function runNpmInstall(cwd: string): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
-    const proc = spawn('npm', ['install', '--prefer-offline'], {
+    const proc = spawn('npm', ['install', '--prefer-offline', '--no-audit', '--no-fund'], {
       cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -37,8 +37,8 @@ function runNpmInstall(cwd: string): Promise<{ success: boolean; error?: string 
 
     const timeout = setTimeout(() => {
       try { proc.kill('SIGTERM') } catch {}
-      resolve({ success: false, error: `npm install timed out after 3 minutes.\n${output.slice(0, 500)}` })
-    }, 3 * 60 * 1000)
+      resolve({ success: false, error: `npm install timed out after 60s.\n${output.slice(0, 500)}` })
+    }, 60_000)
 
     proc.on('close', (code) => {
       clearTimeout(timeout)
@@ -423,12 +423,11 @@ function registerIpcHandlers(): void {
       proc.stdout?.on('data', (d: Buffer) => { output += d.toString() })
       proc.stderr?.on('data', (d: Buffer) => { output += d.toString() })
 
-      // 120s timeout — npm install on a real project can take 60-90s on a cold cache.
-      // The agent needs this to reliably complete installs without timing out.
+      // 60s timeout — warm cache installs are fast; cold installs should still complete.
       const timeout = setTimeout(() => {
         proc.kill('SIGTERM')
-        resolve({ success: false, error: 'Command timed out after 120s', output: output.slice(0, 2000) })
-      }, 120_000)
+        resolve({ success: false, error: 'Command timed out after 60s', output: output.slice(0, 2000) })
+      }, 60_000)
 
       proc.on('close', (code) => {
         clearTimeout(timeout)
