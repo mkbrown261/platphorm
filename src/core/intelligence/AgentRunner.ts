@@ -143,11 +143,14 @@ RULES (enforced — violations throw):
     type: 'function',
     function: {
       name: 'run_command',
-      description: 'Run a shell command in the project root. Allowed: npm install, npm run build, npm run typecheck, git status, git diff. Output capped at 2000 chars. Never use for destructive operations. Throws if shell IPC is not connected.',
+      description: `Run a shell command in the project. Allowed: npm install, npm run build, npm run dev, npm run typecheck, npx, git status, git diff. Output capped at 2000 chars. Never use for destructive operations. Throws if shell IPC is not connected.
+
+IMPORTANT — always run npm install after creating package.json. Use the path parameter to run in a subdirectory when the project lives in a subfolder.`,
       parameters: {
         type: 'object',
         properties: {
-          command: { type: 'string', description: 'Shell command to run in the project root' }
+          command: { type: 'string', description: 'Shell command to run' },
+          path: { type: 'string', description: 'Optional: absolute path to the directory to run the command in. Defaults to the project root. Use this when installing deps in a subfolder (e.g. /Users/me/dev/myapp/frontend).' }
         },
         required: ['command']
       }
@@ -202,7 +205,11 @@ function getDetail(name: string, args: Record<string, any>): string {
   const short = p.split('/').slice(-2).join('/')
   if (name === 'search_in_file' || name === 'search_project')
     return `"${args.pattern}"${args.file_extension ? ` *.${args.file_extension}` : ''}`
-  if (name === 'run_command') return args.command?.slice(0, 50) ?? ''
+  if (name === 'run_command') {
+    const cmd = args.command?.slice(0, 40) ?? ''
+    const inDir = args.path ? ` (in …/${String(args.path).split('/').pop()})` : ''
+    return cmd + inDir
+  }
   if (name === 'edit_file')   return short + ' (patch)'
   if (name === 'get_diagnostics') return 'tsc --noEmit'
   return short || p
@@ -427,11 +434,15 @@ async function executeTool(
           'Tell the user the command could not be run and show them what to run manually.'
         )
       }
-      const r = await shell.runCommand(projectPath, args.command)
+      // Use the explicit path if provided, otherwise fall back to the project root.
+      // This lets the AI run npm install in a subfolder when needed.
+      const runCwd = args.path ? resolvePath(args.path, projectPath) : projectPath
+      const r = await shell.runCommand(runCwd, args.command)
       if (!r.success) {
         throw new Error(
           `run_command failed: ${r.error ?? 'unknown error'}\n` +
           `Command: ${args.command}\n` +
+          `Directory: ${runCwd}\n` +
           `Output: ${r.output?.slice(0, 500) ?? '(none)'}`
         )
       }
@@ -528,6 +539,30 @@ Rules:
 - Do NOT follow it with numbered "next steps", recommendations, or questions. Those go BEFORE the completion list if needed.
 - Do NOT replace the - [x] list with a numbered list. They are different things. A numbered list is not a completion list.
 - The completion list must have every item from the original plan. No items dropped.
+
+━━━ FULL PROJECT LIFECYCLE — NON-NEGOTIABLE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+When you create or modify a project, you own the ENTIRE lifecycle. No handoffs.
+
+**Creating a new project:**
+1. Write all files (package.json, entry point, components, config — everything)
+2. Run `npm install` with run_command immediately after writing package.json
+3. Wait for it to complete — check the output for errors
+4. Tell the user: "Done. Hit Preview to launch it." That's it.
+
+**Modifying an existing project:**
+1. Read the files you'll touch
+2. Make the changes
+3. If you added a new dependency to package.json, run `npm install` immediately
+4. Run get_diagnostics to catch type errors
+5. Clean summary — what changed, what it does
+
+**You never say:**
+- "Run npm install to get started"
+- "You'll need to install dependencies"  
+- "Make sure to run npm install first"
+
+You run it. The user sees a working project.
 
 ━━━ YOUR COMMITMENT TOKEN ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -675,7 +710,7 @@ These are not guidelines. They apply to every output without exception.
 8. **Do it yourself.** If the user needs a dependency installed, install it. If a file needs to be created, create it. Never hand off work you can do.
 9. **Verify your TypeScript.** After changes, run get_diagnostics. Fix errors before the user sees them.
 10. **Notice more than you're asked to.** Security holes, performance cliffs, broken patterns, missing pieces — surface them. Stay in your lane unless you see something that matters, then say so.
-11. **Every project must be runnable.** The root package.json MUST have a "dev" script. If you create a project, you create a complete one: package.json with scripts, all dependencies listed, index.html or entry point, everything needed to run with a single "npm run dev". A project the user can't run is not done.
+11. **Every project must be runnable — and you make it run.** The root package.json MUST have a "dev" script. If you create a project: write package.json with all scripts and deps → run `npm install` using run_command → confirm it succeeds → tell the user it's ready. You do not hand off installs to the user. You do not say "run npm install". You run it yourself. A project the user can't immediately preview is not done.
 ${opts.systemLaws?.length ? `
 ━━━ PROJECT LAWS (NON-NEGOTIABLE) ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

@@ -11,6 +11,51 @@ import Store from 'electron-store'
 // Tracks one running dev server per project root path.
 const previewProcesses = new Map<string, { proc: ChildProcess; port: number; url: string }>()
 
+/**
+ * Run `npm install` in a directory and wait for it to finish.
+ * Used by preview:start to auto-install deps before starting the dev server.
+ * Timeout: 3 minutes — enough for a cold install of a large project.
+ */
+function runNpmInstall(cwd: string): Promise<{ success: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn('npm', ['install', '--prefer-offline'], {
+      cwd,
+      shell: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: {
+        ...process.env,
+        // Suppress npm funding/audit noise so we get clean output
+        NPM_CONFIG_FUND: '0',
+        NPM_CONFIG_AUDIT: '0',
+        NPM_CONFIG_LOGLEVEL: 'error'
+      }
+    })
+
+    let output = ''
+    proc.stdout?.on('data', (d: Buffer) => { output += d.toString() })
+    proc.stderr?.on('data', (d: Buffer) => { output += d.toString() })
+
+    const timeout = setTimeout(() => {
+      try { proc.kill('SIGTERM') } catch {}
+      resolve({ success: false, error: `npm install timed out after 3 minutes.\n${output.slice(0, 500)}` })
+    }, 3 * 60 * 1000)
+
+    proc.on('close', (code) => {
+      clearTimeout(timeout)
+      if (code === 0) {
+        resolve({ success: true })
+      } else {
+        resolve({ success: false, error: `npm install exited with code ${code}.\n${output.slice(0, 800)}` })
+      }
+    })
+
+    proc.on('error', (err) => {
+      clearTimeout(timeout)
+      resolve({ success: false, error: String(err) })
+    })
+  })
+}
+
 /** Detect the dev-script to run for a given project (npm run dev, yarn dev, etc.). */
 /**
  * Find the best runnable project root — checks the given path first, then
@@ -261,13 +306,16 @@ function registerIpcHandlers(): void {
 
     const { cwd: runnableCwd, cmd, args } = runnable
 
-    // Check that dependencies are installed — if node_modules is missing the
-    // dev server will fail immediately and the port will never open.
+    // Auto-install dependencies if node_modules is missing.
+    // The user should never have to run npm install manually — we do it for them.
     const nodeModulesPath = path.join(runnableCwd, 'node_modules')
     if (!fs.existsSync(nodeModulesPath)) {
-      return {
-        success: false,
-        error: `Dependencies not installed in ${runnableCwd}. Run "npm install" in that folder first, then try Preview again.`
+      const installResult = await runNpmInstall(runnableCwd)
+      if (!installResult.success) {
+        return {
+          success: false,
+          error: `Auto-install failed in ${runnableCwd}:\n${installResult.error}`
+        }
       }
     }
 
@@ -354,7 +402,8 @@ function registerIpcHandlers(): void {
   const ALLOWED_COMMAND_PREFIXES = [
     'npm ', 'npx ', 'yarn ', 'pnpm ',
     'git status', 'git diff', 'git log',
-    'node --version', 'node -v'
+    'node --version', 'node -v',
+    'node ', 'which ', 'ls ', 'cat '
   ]
 
   ipcMain.handle('shell:runCommand', async (_event, cwd: string, command: string) => {
@@ -374,10 +423,12 @@ function registerIpcHandlers(): void {
       proc.stdout?.on('data', (d: Buffer) => { output += d.toString() })
       proc.stderr?.on('data', (d: Buffer) => { output += d.toString() })
 
+      // 120s timeout — npm install on a real project can take 60-90s on a cold cache.
+      // The agent needs this to reliably complete installs without timing out.
       const timeout = setTimeout(() => {
         proc.kill('SIGTERM')
-        resolve({ success: false, error: 'Command timed out after 30s', output: output.slice(0, 2000) })
-      }, 30_000)
+        resolve({ success: false, error: 'Command timed out after 120s', output: output.slice(0, 2000) })
+      }, 120_000)
 
       proc.on('close', (code) => {
         clearTimeout(timeout)
