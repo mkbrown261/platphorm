@@ -491,6 +491,46 @@ const QUICK_MODELS = [
   { id: 'deepseek/deepseek-r1',        label: 'DeepSeek R1' },
 ]
 
+// ─── Build enriched prompt with project context ───────────────────────────────
+// When a project is open but no specific file is active, inject the file tree
+// so the model knows what it's working with. Without this, "optimize this" or
+// "turn this into X" gives the model nothing to act on.
+
+function flattenTree(entries: import('../../types').FileEntry[], depth = 0): string {
+  const IGNORED = new Set(['node_modules', '.git', 'dist', 'build', '.next', '.cache', 'coverage'])
+  return entries
+    .filter(e => !IGNORED.has(e.name))
+    .map(e => {
+      const indent = '  '.repeat(depth)
+      const prefix = e.isDirectory ? '📁' : '📄'
+      const line = `${indent}${prefix} ${e.name}`
+      return e.isDirectory && e.children?.length
+        ? line + '\n' + flattenTree(e.children, depth + 1)
+        : line
+    })
+    .join('\n')
+}
+
+function buildPromptWithContext(
+  prompt: string,
+  activeTab: import('../../types').EditorTab | undefined,
+  activeProject: import('../../types').Project | null,
+  fileTree: import('../../types').FileEntry[]
+): string {
+  // Active file open — give the model the file path and content
+  if (activeTab) {
+    return `[Active file: ${activeTab.filePath}]\n\n${activeTab.content ? `[File content:\n${activeTab.content.slice(0, 6000)}]\n\n` : ''}${prompt}`
+  }
+
+  // Project open, no active file — inject the file tree so the model knows what exists
+  if (activeProject && fileTree.length > 0) {
+    const tree = flattenTree(fileTree)
+    return `[Project: ${activeProject.rootPath}]\n[File structure:\n${tree}]\n\n${prompt}`
+  }
+
+  return prompt
+}
+
 export function AIPanel() {
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
@@ -517,7 +557,7 @@ export function AIPanel() {
 
   const { settings, startPipeline, updateLayerProgress, completePipeline, pipelineRunning } = useAIStore()
   const { dna }    = useDNAStore()
-  const { activeProject, openTabs, activeTabId } = useProjectStore()
+  const { activeProject, openTabs, activeTabId, fileTree } = useProjectStore()
   const activeTab  = openTabs.find(t => t.id === activeTabId)
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [msgs])
@@ -666,7 +706,7 @@ export function AIPanel() {
       forbiddenPatterns: dna?.forbiddenPatterns ?? []
     })
 
-    const fullPrompt = activeTab ? `[Context file: ${activeTab.filePath}]\n\n${prompt}` : prompt
+    const fullPrompt = buildPromptWithContext(prompt, activeTab, activeProject, fileTree)
     let assistantText = ''
 
     try {
@@ -778,7 +818,8 @@ export function AIPanel() {
 
         let assistantText = ''
 
-        for await (const event of runAgent(prompt, sys, historyRef.current, undefined, activeProject!.rootPath)) {
+        const enrichedPrompt = buildPromptWithContext(prompt, activeTab, activeProject, fileTree)
+        for await (const event of runAgent(enrichedPrompt, sys, historyRef.current, undefined, activeProject!.rootPath)) {
           if (event.type === 'stream_token') {
             assistantText += event.token
             appendStreamToken(msgId, event.token)
