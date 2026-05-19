@@ -403,7 +403,10 @@ function registerIpcHandlers(): void {
     'npm ', 'npx ', 'yarn ', 'pnpm ',
     'git status', 'git diff', 'git log',
     'node --version', 'node -v',
-    'node ', 'which ', 'ls ', 'cat '
+    'node ', 'which ', 'ls ', 'cat ',
+    'curl ', 'wget ',
+    'mkdir ', 'cp ', 'mv ', 'rm ',
+    'touch ', 'echo ', 'find ', 'grep '
   ]
 
   ipcMain.handle('shell:runCommand', async (_event, cwd: string, command: string) => {

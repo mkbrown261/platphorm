@@ -143,9 +143,9 @@ RULES (enforced — violations throw):
     type: 'function',
     function: {
       name: 'run_command',
-      description: `Run a shell command in the project. Allowed: npm install, npm run build, npm run dev, npm run typecheck, npx, git status, git diff. Output capped at 2000 chars. Never use for destructive operations. Throws if shell IPC is not connected.
+      description: `Run a shell command in the project. Allowed: npm, npx, yarn, pnpm, node, git status/diff/log, curl, wget, mkdir, cp, mv, rm, touch, echo, find, grep, ls, cat, which. Output capped at 2000 chars. Never use for destructive operations (no rm -rf /, no sudo). Throws if shell IPC is not connected.
 
-IMPORTANT — always run npm install after creating package.json. Use the path parameter to run in a subdirectory when the project lives in a subfolder.`,
+IMPORTANT — always run npm install after creating package.json. Use curl or wget to download files (model weights, assets, etc). Use mkdir -p to create directories. Use the path parameter to run in a subdirectory when the project lives in a subfolder.`,
       parameters: {
         type: 'object',
         properties: {
