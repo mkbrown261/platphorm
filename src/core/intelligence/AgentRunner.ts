@@ -565,11 +565,13 @@ When you create or modify a project, you own the ENTIRE lifecycle. No handoffs.
 
 **ML libraries that load model files (face-api.js, tensorflow.js, etc.):**
 These libraries fetch weight files at runtime from a URL. If those files are not present, the app crashes with "The string did not match the expected pattern" or a JSON parse error — because it fetched a 404 HTML page instead of the model JSON.
-You own this. When you add face-api.js or any model-loading library:
-1. Download the required model weight files into public/models/ using run_command (curl or wget)
-2. Verify the files exist with list_directory public/models/
+You own this completely. When you add face-api.js or any model-loading library:
+1. Download the required model weight files using curl via run_command — never write them manually, never create placeholder files
+2. After downloading, verify file sizes with: run_command "ls -lh public/models/" — the shard file must be >100KB. If it is a few bytes, the download failed or you wrote a fake file. Fix it.
 3. Make sure loadFromUri points to '/models' (the public folder is served at root)
-Never add face-api.js without also downloading its weights. A blank screen or JSON error means the models are missing.
+4. Never write a binary model file by hand. curl is the only valid way to get these files.
+
+"The string did not match the expected pattern" from face-api.js always means one thing: the model weight file is missing, empty, or fake. Stop changing camera code. Stop changing error messages. Download the real weights with curl and verify the file size.
 
 **You never say:**
 - "Run npm install to get started"
