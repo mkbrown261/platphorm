@@ -16,6 +16,7 @@ export function FolderPicker({ onSelect, onCancel }: Props) {
   const [creatingFolder, setCreatingFolder] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [newFolderError, setNewFolderError] = useState('')
+  const [newFolderCreated, setNewFolderCreated] = useState('')
   const newFolderRef = useRef<HTMLInputElement>(null)
 
   const navigate = useCallback(async (dir: string) => {
@@ -29,6 +30,7 @@ export function FolderPicker({ onSelect, onCancel }: Props) {
     setCreatingFolder(false)
     setNewFolderName('')
     setNewFolderError('')
+    setNewFolderCreated('')
   }, [])
 
   useEffect(() => {
@@ -55,6 +57,9 @@ export function FolderPicker({ onSelect, onCancel }: Props) {
     if (!result.success) { setNewFolderError(result.error ?? 'Failed'); return }
     await navigate(cwd)
     setSelected(newPath)
+    setNewFolderCreated(newPath)
+    // Auto-clear the success message after 8 seconds
+    setTimeout(() => setNewFolderCreated(''), 8000)
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -131,6 +136,18 @@ export function FolderPicker({ onSelect, onCancel }: Props) {
               {newFolderError && <span style={{ fontSize: 10, color: '#f87171' }}>{newFolderError}</span>}
               <button onClick={confirmNewFolder} style={{ background: 'linear-gradient(135deg, #7c3aed, #4f46e5)', border: 'none', cursor: 'pointer', color: 'white', fontSize: 11, padding: '3px 10px', borderRadius: 6, fontWeight: 600 }}>Create</button>
               <button onClick={() => { setCreatingFolder(false); setNewFolderName(''); setNewFolderError('') }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'rgba(255,255,255,0.3)', fontSize: 11, padding: '3px 6px', borderRadius: 6 }}>✕</button>
+            </div>
+          )}
+
+          {/* Folder-created success banner — shows exact path so user knows where to look in Finder */}
+          {newFolderCreated && (
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 10px', marginBottom: 6, background: 'rgba(34,197,94,0.07)', border: '1px solid rgba(34,197,94,0.25)', borderRadius: 8 }}>
+              <span style={{ fontSize: 13, color: '#4ade80', flexShrink: 0 }}>✓</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 11, color: 'rgba(74,222,128,0.9)', fontWeight: 600, marginBottom: 2 }}>Folder created on disk</div>
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.35)', fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.5 }}>{newFolderCreated}</div>
+                <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.2)', marginTop: 3 }}>If you don't see it in Finder, press ⌘⇧G in Finder and paste the path above.</div>
+              </div>
             </div>
           )}
 

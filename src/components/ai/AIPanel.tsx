@@ -837,7 +837,9 @@ export function AIPanel() {
           <div style={{ fontSize: 10, color: confirmPending ? '#f59e0b' : busy ? '#a78bfa' : '#22c55e', transition: 'color 0.3s' }}>
             {confirmPending ? 'Awaiting your confirmation...'
               : busy ? (activeProject ? 'Running governance pipeline...' : 'Working...')
-              : (dna ? dna.identity?.systemName : 'Ready')}
+              : (dna
+                  ? (dna.identity?.systemName || activeProject?.rootPath?.split('/').filter(Boolean).pop() || 'Ready')
+                  : 'Ready')}
           </div>
         </div>
         {/* Status dot */}

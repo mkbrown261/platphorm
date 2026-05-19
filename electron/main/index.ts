@@ -261,6 +261,17 @@ function registerIpcHandlers(): void {
 
     const { cwd: runnableCwd, cmd, args } = runnable
 
+    // Check that dependencies are installed — if node_modules is missing the
+    // dev server will fail immediately and the port will never open.
+    const nodeModulesPath = path.join(runnableCwd, 'node_modules')
+    if (!fs.existsSync(nodeModulesPath)) {
+      return {
+        success: false,
+        error: `Dependencies not installed in ${runnableCwd}. Run "npm install" in that folder first, then try Preview again.`
+      }
+    }
+
+    let startupError = ''
     const proc = spawn(cmd, args, {
       cwd: runnableCwd,
       env: {
@@ -270,9 +281,12 @@ function registerIpcHandlers(): void {
         NEXT_TELEMETRY_DISABLED: '1'
       },
       shell: true,
-      stdio: 'ignore'   // don't capture — just let it run
+      stdio: ['ignore', 'pipe', 'pipe']
     })
 
+    // Capture startup output so we can report errors if the server never opens a port
+    proc.stdout?.on('data', (d: Buffer) => { startupError += d.toString().slice(0, 500) })
+    proc.stderr?.on('data', (d: Buffer) => { startupError += d.toString().slice(0, 500) })
     proc.on('error', () => {})   // prevent unhandled error crashes
 
     // Give the process 1.5s to start, then poll common ports every 500ms.
@@ -284,9 +298,12 @@ function registerIpcHandlers(): void {
 
     if (!port) {
       try { proc.kill('SIGTERM') } catch {}
+      const detail = startupError.trim()
+        ? `\n\nServer output:\n${startupError.slice(0, 600).trim()}`
+        : ''
       return {
         success: false,
-        error: 'Dev server did not start within 30s. Make sure npm install is complete and the project has a dev script in package.json.'
+        error: `Dev server did not open a port within 30s. Make sure npm install is complete and the project has a dev script in package.json.${detail}`
       }
     }
 

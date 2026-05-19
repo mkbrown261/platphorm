@@ -81,10 +81,11 @@ const TOOLS: ChatCompletionTool[] = [
       description: `Surgically replace an exact block of text in an existing file. Prefer this over write_file for targeted changes.
 
 RULES (enforced — violations throw):
-1. old_content must match EXACTLY (including all whitespace and indentation)
+1. old_content must match EXACTLY (including all whitespace, indentation, quotes, and line endings)
 2. old_content must appear EXACTLY ONCE in the file — if it appears 0 or 2+ times the call fails
-3. If unsure, call read_file first and copy the text verbatim
-4. For multiple changes to the same file, make them sequentially — one edit_file per change`,
+3. ALWAYS call read_file immediately before edit_file and copy old_content CHARACTER-FOR-CHARACTER from that result. Never reconstruct old_content from memory — even small differences (a space, a quote style, a trailing comma) will cause failure.
+4. For multiple changes to the same file, make them sequentially — one edit_file per change
+5. If edit_file fails with "old_content not found", the error message contains the actual file content — use that to find the exact text, then retry`,
       parameters: {
         type: 'object',
         properties: {
@@ -295,11 +296,18 @@ async function executeTool(
       // files with repeated blocks. We enforce uniqueness here.
       const occurrences = current.split(args.old_content).length - 1
       if (occurrences === 0) {
+        // Give the AI the actual file content so it can self-correct without
+        // needing another read_file round-trip. Cap at 3000 chars to stay within limits.
+        const preview = current.length > 3000
+          ? current.slice(0, 3000) + '\n... (truncated, use read_file for full content)'
+          : current
         throw new Error(
           `edit_file: old_content not found in ${path}.\n` +
-          `Read the file with read_file first and copy the exact text you want to replace, ` +
-          `including all whitespace and indentation.\n` +
-          `Tip: use search_in_file to locate the line numbers first.`
+          `Your old_content did not match the actual file. ` +
+          `You must copy old_content CHARACTER-FOR-CHARACTER from the read_file result — ` +
+          `do not reconstruct it from memory, do not paraphrase, do not change whitespace or quotes.\n\n` +
+          `ACTUAL FILE CONTENT (use this to find the exact text to replace):\n` +
+          `\`\`\`\n${preview}\n\`\`\``
         )
       }
       if (occurrences > 1) {
@@ -480,6 +488,11 @@ export function buildAgentSystemPrompt(opts: {
   forbiddenPatterns?: string[]
   conversationSummary?: string
 }): string {
+  // Always provide a project name — use systemName from DNA if available,
+  // otherwise fall back to the folder name derived from the project path.
+  // This prevents the AI from inventing placeholder names like "UNDEFINED_PROJECT".
+  const resolvedName = opts.systemName
+    || (opts.projectPath ? opts.projectPath.split('/').filter(Boolean).pop() : undefined)
   return `You are PLATPHORM — an AI engineering and creative partner embedded inside a developer's IDE with direct access to their file system. You can read, write, edit, and search their project.
 
 You are not an assistant. You are a collaborator. There is a difference: an assistant does what it's told. A collaborator thinks alongside the person, pushes back when something is wrong, brings their own taste and judgment, and genuinely cares whether the result is excellent.
@@ -652,7 +665,7 @@ Iteration is the actual work. The first version is a hypothesis. The conversatio
 
 These are not guidelines. They apply to every output without exception.
 
-1. **Read before you write.** Always. No exceptions. Never assume.
+1. **Read before you write.** Always. No exceptions. Never assume. For edit_file specifically: you MUST call read_file on the same file in the same response, immediately before the edit_file call. Copy old_content character-for-character from that read_file result. Do not type it from memory — a single space difference causes failure.
 2. **Complete files or surgical patches — nothing in between.** No "..." no "rest stays the same." Write the whole thing with write_file or use edit_file for a precise patch.
 3. **Match the codebase exactly.** Quotes, spacing, semicolons, naming, import order — whatever the project uses, you use.
 4. **Wire everything up.** New component → imported and rendered. New route → registered. New env var → documented. Creation without integration is not done.
@@ -672,7 +685,7 @@ ${opts.systemLaws.map((l, i) => `${i + 1}. ${l}`).join('\n')}` : ''}${opts.forbi
 ${opts.forbiddenPatterns.join('\n')}` : ''}${opts.projectPath ? `
 ━━━ PROJECT ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Root: ${opts.projectPath}${opts.systemName ? `\nName: ${opts.systemName}` : ''}${opts.corePurpose ? `\nPurpose: ${opts.corePurpose}` : ''}
+Root: ${opts.projectPath}${resolvedName ? `\nName: ${resolvedName}` : ''}${opts.corePurpose ? `\nPurpose: ${opts.corePurpose}` : ''}
 
 PATH RULE: Every path in every tool call must be absolute and start with ${opts.projectPath}
 Correct: ${opts.projectPath}/src/components/Button.tsx
