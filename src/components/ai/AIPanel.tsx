@@ -837,9 +837,12 @@ export function AIPanel() {
           <div style={{ fontSize: 10, color: confirmPending ? '#f59e0b' : busy ? '#a78bfa' : '#22c55e', transition: 'color 0.3s' }}>
             {confirmPending ? 'Awaiting your confirmation...'
               : busy ? (activeProject ? 'Running governance pipeline...' : 'Working...')
-              : (dna
-                  ? (dna.identity?.systemName || activeProject?.rootPath?.split('/').filter(Boolean).pop() || 'Ready')
-                  : 'Ready')}
+              : (() => {
+                  const raw = dna?.identity?.systemName
+                  const bad = /^(UNDEFINED_PROJECT|undefined|null|Unknown Project|\.\.\.|\s*)$/i
+                  const name = (raw && !bad.test(raw)) ? raw : activeProject?.rootPath?.split('/').filter(Boolean).pop()
+                  return name || 'Ready'
+                })()}
           </div>
         </div>
         {/* Status dot */}

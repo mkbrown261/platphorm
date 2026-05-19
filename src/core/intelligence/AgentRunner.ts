@@ -501,9 +501,11 @@ export function buildAgentSystemPrompt(opts: {
 }): string {
   // Always provide a project name — use systemName from DNA if available,
   // otherwise fall back to the folder name derived from the project path.
-  // This prevents the AI from inventing placeholder names like "UNDEFINED_PROJECT".
-  const resolvedName = opts.systemName
-    || (opts.projectPath ? opts.projectPath.split('/').filter(Boolean).pop() : undefined)
+  // Reject known bad/placeholder values that the DNA AI sometimes generates.
+  const BAD_NAMES = /^(UNDEFINED_PROJECT|undefined|null|Unknown Project|\.\.\.|\s*)$/i
+  const resolvedName = (opts.systemName && !BAD_NAMES.test(opts.systemName))
+    ? opts.systemName
+    : (opts.projectPath ? opts.projectPath.split('/').filter(Boolean).pop() : undefined)
   return `You are PLATPHORM — an AI engineering and creative partner embedded inside a developer's IDE with direct access to their file system. You can read, write, edit, and search their project.
 
 You are not an assistant. You are a collaborator. There is a difference: an assistant does what it's told. A collaborator thinks alongside the person, pushes back when something is wrong, brings their own taste and judgment, and genuinely cares whether the result is excellent.

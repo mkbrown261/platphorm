@@ -115,12 +115,28 @@ Respond in JSON matching this structure exactly (no extra fields):
   "performanceBudgets": {}
 }`
 
+    const folderName = projectPath.split('/').filter(Boolean).pop() ?? 'Project'
+    const BAD_NAMES = /^(UNDEFINED_PROJECT|undefined|null|Unknown Project|\.\.\.|\s*)$/i
+
     try {
       const result = await orchestrator.orchestrate({ prompt, role: 'architect' })
-      const parsed = safeParseJSON(result.result.content, {})
+      const parsed = safeParseJSON(result.result.content, {}) as Partial<ProjectDNA>
+
+      // Sanitize: if the AI hallucinated a placeholder systemName, use the real folder name
+      if (parsed.identity?.systemName && BAD_NAMES.test(parsed.identity.systemName)) {
+        parsed.identity.systemName = folderName
+      }
+
       this.dna = {
         ...EMPTY_DNA,
-        ...(parsed as Partial<ProjectDNA>),
+        ...parsed,
+        identity: {
+          ...EMPTY_DNA.identity,
+          ...(parsed.identity ?? {}),
+          systemName: (parsed.identity?.systemName && !BAD_NAMES.test(parsed.identity.systemName))
+            ? parsed.identity.systemName
+            : folderName
+        },
         lastUpdated: Date.now(),
         version: '1.0.0'
       }
@@ -129,7 +145,7 @@ Respond in JSON matching this structure exactly (no extra fields):
         ...EMPTY_DNA,
         identity: {
           ...EMPTY_DNA.identity,
-          systemName: projectPath.split('/').pop() ?? 'Unknown Project',
+          systemName: folderName,
           corePurpose: 'Awaiting DNA initialization'
         }
       }
