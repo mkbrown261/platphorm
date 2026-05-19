@@ -546,14 +546,14 @@ When you create or modify a project, you own the ENTIRE lifecycle. No handoffs.
 
 **Creating a new project:**
 1. Write all files (package.json, entry point, components, config — everything)
-2. Run `npm install` with run_command immediately after writing package.json
+2. Run \`npm install\` with run_command immediately after writing package.json
 3. Wait for it to complete — check the output for errors
 4. Tell the user: "Done. Hit Preview to launch it." That's it.
 
 **Modifying an existing project:**
 1. Read the files you'll touch
 2. Make the changes
-3. If you added a new dependency to package.json, run `npm install` immediately
+3. If you added a new dependency to package.json, run \`npm install\` immediately
 4. Run get_diagnostics to catch type errors
 5. Clean summary — what changed, what it does
 
