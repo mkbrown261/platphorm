@@ -38,8 +38,29 @@ export function PreviewPanel() {
   const [preview, setPreview] = useState<PreviewState>({ status: 'idle' })
   const [progress, setProgress] = useState<{ stage: string; detail?: string } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [consoleErrors, setConsoleErrors] = useState<string[]>([])
   const webviewRef = useRef<any>(null)
   const { activeProject } = useProjectStore()
+
+  // Capture runtime JS errors from the previewed page. A white screen is
+  // almost always a crash in the page's console — invisible unless we
+  // surface it here where the user (and the AI) can actually see it.
+  useEffect(() => {
+    const wv = webviewRef.current
+    if (!wv || preview.status !== 'running') return
+    const onConsole = (e: any) => {
+      // level 3 = error in Electron's console-message event
+      if (e.level === 3 || e.level === 'error') {
+        const msg = `${e.message}${e.sourceId ? ` (${String(e.sourceId).split('/').pop()}:${e.line})` : ''}`
+        setConsoleErrors(prev => prev.includes(msg) ? prev : [...prev.slice(-9), msg])
+      }
+    }
+    wv.addEventListener('console-message', onConsole)
+    return () => { wv.removeEventListener('console-message', onConsole) }
+  }, [preview.status, refreshKey])
+
+  // Clear captured errors on refresh / restart
+  useEffect(() => { setConsoleErrors([]) }, [refreshKey, preview.status])
 
   // Live startup progress from the main process — the user always sees what
   // is happening (scanning / installing deps / starting server / waiting).
@@ -183,22 +204,47 @@ export function PreviewPanel() {
       {/* Content area */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {preview.status === 'running' && (
-          // Embedded browser: <webview> runs the user's site in its own process
-          // with zero cross-origin restrictions — the page renders right here,
-          // with hot reload, exactly like an in-app browser tab.
-          <webview
-            key={refreshKey}
-            ref={webviewRef}
-            src={preview.url}
-            allowpopups="true"
-            style={{
-              display: 'inline-flex',
-              width: '100%',
-              height: '100%',
-              border: 'none',
-              background: '#ffffff'
-            }}
-          />
+          <>
+            {/* Embedded browser: <webview> runs the user's site in its own process
+                with zero cross-origin restrictions — the page renders right here,
+                with hot reload, exactly like an in-app browser tab. */}
+            <webview
+              key={refreshKey}
+              ref={webviewRef}
+              src={preview.url}
+              allowpopups="true"
+              style={{
+                display: 'inline-flex',
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                background: '#ffffff'
+              }}
+            />
+            {/* Runtime-error banner — turns invisible white-screen crashes into
+                copyable error text the user can paste straight to the AI. */}
+            {consoleErrors.length > 0 && (
+              <div style={styles.errorBanner}>
+                <div style={styles.errorBannerHeader}>
+                  <span style={{ fontWeight: 700 }}>⚠ {consoleErrors.length} runtime error{consoleErrors.length > 1 ? 's' : ''} in the page</span>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      style={styles.errorBannerBtn}
+                      onClick={() => navigator.clipboard.writeText(
+                        `The preview shows a white screen. Console errors:\n${consoleErrors.join('\n')}\nFix these errors and verify.`
+                      ).catch(() => {})}
+                    >Copy for AI</button>
+                    <button style={styles.errorBannerBtn} onClick={() => setConsoleErrors([])}>Dismiss</button>
+                  </div>
+                </div>
+                <div style={styles.errorBannerBody}>
+                  {consoleErrors.map((err, i) => (
+                    <div key={i} style={{ padding: '2px 0', borderBottom: i < consoleErrors.length - 1 ? '1px solid rgba(239,68,68,0.15)' : 'none' }}>{err}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {preview.status === 'idle' && (
@@ -389,5 +435,25 @@ const styles = {
   },
   placeholderDesc: {
     fontSize: 12, color: 'rgba(255,255,255,0.25)', lineHeight: 1.65, maxWidth: 300
+  },
+  errorBanner: {
+    position: 'absolute' as const, left: 8, right: 8, bottom: 8,
+    background: 'rgba(20,8,10,0.97)', border: '1px solid rgba(239,68,68,0.4)',
+    borderRadius: 10, overflow: 'hidden', zIndex: 5,
+    boxShadow: '0 4px 24px rgba(0,0,0,0.5)'
+  },
+  errorBannerHeader: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '7px 12px', fontSize: 11, color: '#f87171',
+    background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(239,68,68,0.2)'
+  },
+  errorBannerBtn: {
+    padding: '3px 10px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.35)',
+    background: 'transparent', color: '#f87171', fontSize: 10, fontWeight: 600,
+    cursor: 'pointer', fontFamily: 'inherit'
+  },
+  errorBannerBody: {
+    padding: '8px 12px', maxHeight: 120, overflowY: 'auto' as const,
+    fontFamily: 'monospace', fontSize: 10.5, lineHeight: 1.5, color: 'rgba(252,165,165,0.9)'
   }
 }

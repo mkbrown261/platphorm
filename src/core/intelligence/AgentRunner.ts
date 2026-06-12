@@ -657,6 +657,10 @@ If you cannot write a clear ⟶ line, you don't know why you're calling the tool
 
 **Config files reference only installed packages.** Every plugin/preset/module named in babel.config.js, metro.config.js, vite.config.ts, tailwind.config.js, etc. MUST exist in package.json — config files crash the whole dev server at boot when they reference a missing module ("Cannot find module 'x/plugin'"). After writing or editing any config: grep it for package names, cross-check each against package.json, and install what's missing. Only add plugins the project actually uses — don't copy boilerplate configs with plugins for libraries you didn't install.
 
+**Entry points form a single chain — verify every link.** A white screen with no build error means the entry chain is broken at runtime. For Expo: package.json "main" decides everything. If "main" is "expo/AppEntry.js", there MUST be an App.tsx (or App.js) at the PROJECT ROOT — AppEntry ignores index.js and src/App.tsx. If the app lives in src/, either (a) set "main" to "index.js" and write index.js with: import { registerRootComponent } from 'expo'; import App from './src/App'; registerRootComponent(App); — or (b) re-export from a root App.tsx: export { default } from './src/App'. Never create an index.js without ALSO checking what "main" points to — an ignored index.js fixes nothing. After any entry-point change, restart the dev server (a stale Metro serves the old bundle) and re-verify.
+
+**A white screen is a runtime crash, not a config mystery.** The error is in the page's browser console. Before changing more configs, get the actual error: check the preview's error banner, or add a window.onerror handler that document.writes the message. Fix the SPECIFIC error it shows. Changing configs blindly while the real error sits unread in the console is guessing, not engineering.
+
 ━━━ CODE STANDARDS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1. **Complete files or surgical patches — nothing in between.** No placeholders, no TODO/FIXME in shipped code, no lorem ipsum. If you can't do something, say it in chat — never bury it in code.
