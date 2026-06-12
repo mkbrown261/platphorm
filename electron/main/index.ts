@@ -16,9 +16,52 @@ const previewProcesses = new Map<string, { proc?: ChildProcess; server?: HttpSer
 function stopPreviewFor(projectPath: string): void {
   const existing = previewProcesses.get(projectPath)
   if (!existing) return
-  try { existing.proc?.kill('SIGTERM') } catch {}
+  killProcessTree(existing.proc)
   try { existing.server?.close() } catch {}
   previewProcesses.delete(projectPath)
+}
+
+/**
+ * Kill a spawned dev server AND all its children.
+ * With shell:true, proc.kill() only kills the shell — the actual dev server
+ * (Metro, Vite, Next) keeps running as an orphan and squats on its port,
+ * which then breaks every subsequent preview start ("port in use").
+ * Spawning with detached:true puts the whole tree in its own process group,
+ * killable atomically via the negative-PID convention on POSIX.
+ */
+function killProcessTree(proc?: ChildProcess): void {
+  if (!proc || proc.pid == null) return
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(proc.pid), '/T', '/F'], { stdio: 'ignore' })
+    } else {
+      // Negative PID = kill the entire process group (requires detached:true at spawn)
+      try { process.kill(-proc.pid, 'SIGTERM') } catch { proc.kill('SIGTERM') }
+      // Escalate if anything survives
+      const pid = proc.pid
+      setTimeout(() => {
+        try { process.kill(-pid, 'SIGKILL') } catch {}
+      }, 3000)
+    }
+  } catch {}
+}
+
+/** Ask the OS for a free port. */
+function getFreePort(): Promise<number> {
+  const net = require('net') as typeof import('net')
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.once('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const addr = srv.address()
+      if (addr && typeof addr === 'object') {
+        const port = addr.port
+        srv.close(() => resolve(port))
+      } else {
+        srv.close(); reject(new Error('no port'))
+      }
+    })
+  })
 }
 
 /**
@@ -136,8 +179,11 @@ function findRunnableProject(projectPath: string): RunnableProject | null {
       // server. Running 'react-native start' renders nothing in a browser.
       if (deps['react-native'] || deps['expo']) {
         if (deps['expo'] && (deps['react-native-web'] || deps['react-dom'])) {
-          // Expo with web support — previewable in a browser.
-          return { kind: 'script', cwd: dir, cmd: 'npx', args: ['expo', 'start', '--web', '--port', '19006'] }
+          // Expo with web support — previewable in a browser. Port is chosen
+          // dynamically at start time (PORT_PLACEHOLDER substituted with a
+          // free port) — a hardcoded port breaks as soon as one zombie/other
+          // window holds it, because npx expo can't prompt in non-interactive mode.
+          return { kind: 'script', cwd: dir, cmd: 'npx', args: ['expo', 'start', '--web', '--port', 'PORT_PLACEHOLDER'] }
         }
         return {
           kind: 'unsupported',
@@ -488,7 +534,18 @@ function registerIpcHandlers(): void {
       }
     }
 
-    const { cwd: runnableCwd, cmd, args } = runnable
+    const { cwd: runnableCwd, cmd } = runnable
+    let args = runnable.args
+
+    // Dynamic port substitution — commands that need an explicit port (Expo web)
+    // get a fresh OS-assigned free port every start. Hardcoded ports break the
+    // moment a zombie process or another window holds them, and CLIs like
+    // 'npx expo' cannot prompt for an alternative in non-interactive mode.
+    let expectedPort: number | null = null
+    if (args.includes('PORT_PLACEHOLDER')) {
+      expectedPort = await getFreePort()
+      args = args.map(a => a === 'PORT_PLACEHOLDER' ? String(expectedPort) : a)
+    }
 
     // Auto-install dependencies if node_modules is missing.
     // The user should never have to run npm install manually — we do it for them.
@@ -522,9 +579,17 @@ function registerIpcHandlers(): void {
         ...processEnvWithFullPath(),
         BROWSER: 'none',
         VITE_OPEN: 'false',
-        NEXT_TELEMETRY_DISABLED: '1'
+        NEXT_TELEMETRY_DISABLED: '1',
+        // Make CLIs answer their own prompts with defaults instead of dying
+        // with "Input is required ... in non-interactive mode" (Expo) or hanging.
+        CI: '1',
+        EXPO_NO_TELEMETRY: '1'
       },
       shell: true,
+      // Own process group — lets stopPreviewFor kill the WHOLE tree (shell +
+      // Metro/Vite/Next). Without this, killing the shell leaks an orphaned
+      // dev server that squats on its port and breaks the next preview start.
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe']
     })
     proc.on('close', (code) => { procExited = true; procExitCode = code })
@@ -550,10 +615,23 @@ function registerIpcHandlers(): void {
     }
 
     progress('Waiting for the dev server to open a port…')
-    const port = await detectNewPort(28_500, preExistingPorts, () => startupError)   // 1.5s already spent = 30s total
+    // If we assigned the port ourselves, check it directly first — fastest and
+    // unambiguous. Fall back to output-parsing + candidate scan.
+    let port: number | null = null
+    if (expectedPort) {
+      const deadline = Date.now() + 28_500
+      while (Date.now() < deadline && !port) {
+        if (await isPortOpen(expectedPort)) { port = expectedPort; break }
+        if (procExited) break
+        await new Promise(r => setTimeout(r, 500))
+      }
+    }
+    if (!port) {
+      port = await detectNewPort(expectedPort ? 3_000 : 28_500, preExistingPorts, () => startupError)
+    }
 
     if (!port) {
-      try { proc.kill('SIGTERM') } catch {}
+      killProcessTree(proc)   // kill the whole tree — a leaked Metro/Vite squats on the port forever
       const detail = startupError.trim()
         ? `\n\nServer output:\n${startupError.slice(0, 600).trim()}`
         : ''
@@ -581,10 +659,11 @@ function registerIpcHandlers(): void {
     return { running: true, port: existing.port, url: existing.url }
   })
 
-  // Kill all preview servers on app quit
+  // Kill all preview servers (and their process trees) on app quit —
+  // leaked dev servers squat on ports and break future preview starts.
   app.on('before-quit', () => {
     for (const { proc, server } of previewProcesses.values()) {
-      try { proc?.kill('SIGTERM') } catch {}
+      killProcessTree(proc)
       try { server?.close() } catch {}
     }
   })
