@@ -8,8 +8,18 @@ import { spawn, ChildProcess } from 'child_process'
 import Store from 'electron-store'
 
 // ── Preview dev-server process registry ──────────────────────────────────────
-// Tracks one running dev server per project root path.
-const previewProcesses = new Map<string, { proc: ChildProcess; port: number; url: string }>()
+// Tracks one running dev server (child process or built-in static server)
+// per project root path.
+import type { Server as HttpServer } from 'http'
+const previewProcesses = new Map<string, { proc?: ChildProcess; server?: HttpServer; port: number; url: string }>()
+
+function stopPreviewFor(projectPath: string): void {
+  const existing = previewProcesses.get(projectPath)
+  if (!existing) return
+  try { existing.proc?.kill('SIGTERM') } catch {}
+  try { existing.server?.close() } catch {}
+  previewProcesses.delete(projectPath)
+}
 
 /**
  * GUI-launched apps on macOS get a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin)
@@ -101,28 +111,55 @@ function runNpmInstall(
  * one level of subfolders. Returns the path + command to run, or null if
  * nothing runnable is found anywhere.
  */
-function findRunnableProject(projectPath: string): {
-  cwd: string; cmd: string; args: string[]
-} | null {
+type RunnableProject =
+  | { kind: 'script'; cwd: string; cmd: string; args: string[] }
+  | { kind: 'static'; cwd: string }
+  | { kind: 'unsupported'; reason: string }
+
+function findRunnableProject(projectPath: string): RunnableProject | null {
   const PREFERRED = ['dev', 'start', 'serve', 'preview']
 
-  const tryPath = (dir: string): { cwd: string; cmd: string; args: string[] } | null => {
+  const tryPath = (dir: string): RunnableProject | null => {
     const pkgPath = path.join(dir, 'package.json')
-    if (!fs.existsSync(pkgPath)) return null
+    if (!fs.existsSync(pkgPath)) {
+      // No package.json — a plain HTML site is still previewable via the
+      // built-in static server.
+      if (fs.existsSync(path.join(dir, 'index.html'))) return { kind: 'static', cwd: dir }
+      return null
+    }
     try {
       const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
+      const deps: Record<string, string> = { ...pkg.dependencies, ...pkg.devDependencies }
       const scripts: Record<string, string> = pkg.scripts ?? {}
+
+      // React Native / Expo detection — Metro is a MOBILE bundler, not a web
+      // server. Running 'react-native start' renders nothing in a browser.
+      if (deps['react-native'] || deps['expo']) {
+        if (deps['expo'] && (deps['react-native-web'] || deps['react-dom'])) {
+          // Expo with web support — previewable in a browser.
+          return { kind: 'script', cwd: dir, cmd: 'npx', args: ['expo', 'start', '--web', '--port', '19006'] }
+        }
+        return {
+          kind: 'unsupported',
+          reason: 'This is a React Native MOBILE app — it cannot render in a browser preview. ' +
+            'Ask the AI to either (a) convert it to an Expo app with web support ' +
+            '(npx expo install react-dom react-native-web), or (b) build it as a web app instead.'
+        }
+      }
+
       for (const name of PREFERRED) {
         if (scripts[name]) {
           const useYarn = fs.existsSync(path.join(dir, 'yarn.lock'))
           const usePnpm = fs.existsSync(path.join(dir, 'pnpm-lock.yaml'))
           const pm = useYarn ? 'yarn' : usePnpm ? 'pnpm' : 'npm'
-          return { cwd: dir, cmd: pm, args: ['run', name] }
+          return { kind: 'script', cwd: dir, cmd: pm, args: ['run', name] }
         }
       }
       // package.json exists but no script — check for local vite binary
       const viteLocal = path.join(dir, 'node_modules', '.bin', 'vite')
-      if (fs.existsSync(viteLocal)) return { cwd: dir, cmd: viteLocal, args: [] }
+      if (fs.existsSync(viteLocal)) return { kind: 'script', cwd: dir, cmd: viteLocal, args: [] }
+      // Last resort: static index.html next to a script-less package.json
+      if (fs.existsSync(path.join(dir, 'index.html'))) return { kind: 'static', cwd: dir }
     } catch {}
     return null
   }
@@ -132,22 +169,73 @@ function findRunnableProject(projectPath: string): {
   if (root) return root
 
   // 2. Search one level of subfolders (website/, client/, app/, frontend/, etc.)
+  // Prefer runnable projects over unsupported ones across subfolders.
+  let fallback: RunnableProject | null = null
   try {
     const entries = fs.readdirSync(projectPath, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isDirectory()) continue
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue
       const sub = tryPath(path.join(projectPath, entry.name))
-      if (sub) return sub
+      if (sub && sub.kind !== 'unsupported') return sub
+      if (sub && !fallback) fallback = sub
     }
   } catch {}
 
-  return null
+  return fallback
+}
+
+/**
+ * Built-in zero-dependency static file server for plain HTML projects.
+ * Serves the directory on an OS-assigned free port.
+ */
+function startStaticServer(dir: string): Promise<{ server: HttpServer; port: number }> {
+  const http = require('http') as typeof import('http')
+  const MIME: Record<string, string> = {
+    '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript',
+    '.mjs': 'text/javascript', '.json': 'application/json', '.svg': 'image/svg+xml',
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+    '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
+    '.ttf': 'font/ttf', '.mp4': 'video/mp4', '.mp3': 'audio/mpeg', '.wasm': 'application/wasm',
+    '.txt': 'text/plain', '.xml': 'application/xml', '.pdf': 'application/pdf'
+  }
+  return new Promise((resolve, reject) => {
+    const server = http.createServer((req, res) => {
+      try {
+        const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0])
+        let filePath = path.join(dir, path.normalize(urlPath).replace(/^(\.\.[/\\])+/, ''))
+        // Containment: never serve outside the project dir
+        if (!filePath.startsWith(dir)) { res.writeHead(403); res.end('Forbidden'); return }
+        if (fs.existsSync(filePath) && fs.statSync(filePath).isDirectory()) {
+          filePath = path.join(filePath, 'index.html')
+        }
+        if (!fs.existsSync(filePath)) {
+          // SPA-style fallback to root index.html
+          const fallback = path.join(dir, 'index.html')
+          if (fs.existsSync(fallback)) filePath = fallback
+          else { res.writeHead(404); res.end('Not found'); return }
+        }
+        res.writeHead(200, {
+          'Content-Type': MIME[path.extname(filePath).toLowerCase()] ?? 'application/octet-stream',
+          'Cache-Control': 'no-store'   // always fresh — the AI edits files live
+        })
+        fs.createReadStream(filePath).pipe(res)
+      } catch {
+        res.writeHead(500); res.end('Server error')
+      }
+    })
+    server.on('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address()
+      if (addr && typeof addr === 'object') resolve({ server, port: addr.port })
+      else reject(new Error('Static server failed to bind a port'))
+    })
+  })
 }
 
 function detectDevCommand(projectPath: string): { cmd: string; args: string[] } {
   const result = findRunnableProject(projectPath)
-  if (result) return { cmd: result.cmd, args: result.args }
+  if (result && result.kind === 'script') return { cmd: result.cmd, args: result.args }
   return { cmd: 'npm', args: ['run', 'dev'] }
 }
 
@@ -164,7 +252,7 @@ function isPortOpen(port: number): Promise<boolean> {
 }
 
 // Common dev-server ports. Vite: 5173 (+5174... when busy). Next/CRA: 3000.
-const CANDIDATE_PORTS = [5173, 5174, 5175, 3000, 3001, 3002, 4000, 4173, 8080, 8000, 8888, 5000, 5001, 4321]
+const CANDIDATE_PORTS = [5173, 5174, 5175, 3000, 3001, 3002, 4000, 4173, 8080, 8000, 8888, 5000, 5001, 4321, 19006]
 
 /** Snapshot which candidate ports are ALREADY open (e.g. PLATPHORM's own dev server). */
 async function snapshotOpenPorts(): Promise<Set<number>> {
@@ -369,18 +457,34 @@ function registerIpcHandlers(): void {
     }
 
     // Kill any existing server for this project
-    const existing = previewProcesses.get(projectPath)
-    if (existing) {
-      try { existing.proc.kill('SIGTERM') } catch {}
-      previewProcesses.delete(projectPath)
-    }
+    stopPreviewFor(projectPath)
 
     progress('Scanning project for a runnable dev script…')
     const runnable = findRunnableProject(projectPath)
     if (!runnable) {
       return {
         success: false,
-        error: 'No runnable project found. The project needs a package.json with a "dev", "start", "serve" or "preview" script. Ask the AI to set one up.'
+        error: 'No runnable project found. The project needs either an index.html or a package.json with a "dev", "start", "serve" or "preview" script. Ask the AI to set one up.'
+      }
+    }
+
+    // Unsupported project types (e.g. bare React Native) — explain instead of
+    // spawning a doomed Metro process.
+    if (runnable.kind === 'unsupported') {
+      return { success: false, error: runnable.reason }
+    }
+
+    // Plain HTML projects — serve them with the built-in static server.
+    // Instant, zero dependencies, no npm needed.
+    if (runnable.kind === 'static') {
+      progress('Starting built-in static server…')
+      try {
+        const { server, port } = await startStaticServer(runnable.cwd)
+        const url = `http://127.0.0.1:${port}`
+        previewProcesses.set(projectPath, { server, port, url })
+        return { success: true, port, url }
+      } catch (err) {
+        return { success: false, error: `Static server failed to start: ${String(err)}` }
       }
     }
 
@@ -466,11 +570,7 @@ function registerIpcHandlers(): void {
 
   // ── Live preview: stop dev server ─────────────────────────────────────────
   ipcMain.handle('preview:stop', async (_event, projectPath: string) => {
-    const existing = previewProcesses.get(projectPath)
-    if (existing) {
-      existing.proc.kill('SIGTERM')
-      previewProcesses.delete(projectPath)
-    }
+    stopPreviewFor(projectPath)
     return { success: true }
   })
 
@@ -483,8 +583,9 @@ function registerIpcHandlers(): void {
 
   // Kill all preview servers on app quit
   app.on('before-quit', () => {
-    for (const { proc } of previewProcesses.values()) {
-      try { proc.kill('SIGTERM') } catch {}
+    for (const { proc, server } of previewProcesses.values()) {
+      try { proc?.kill('SIGTERM') } catch {}
+      try { server?.close() } catch {}
     }
   })
 
