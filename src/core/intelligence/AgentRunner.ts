@@ -149,7 +149,7 @@ RULES (enforced — violations throw):
     type: 'function',
     function: {
       name: 'run_command',
-      description: `Run a shell command in the project. Allowed: npm, npx, yarn, pnpm, node, git status/diff/log/add/commit/init, curl, wget, mkdir, cp, mv, rm, touch, echo, find, grep, ls, cat, head, tail, wc, which. Chained commands (&&) are validated segment-by-segment. Destructive operations (rm on absolute/home paths, sudo, node -e) are blocked in code. Installs/builds get a 5-minute timeout; other commands 90s. The result reports the REAL exit code — a failure is a failure, never proceed as if it succeeded.
+      description: `Run a shell command in the project. Allowed: npm, npx, yarn, pnpm, node, git status/diff/log/add/commit/init, curl, wget, mkdir, cp, mv, rm, touch, echo, find, grep, ls, cat, head, tail, wc, which. Chained commands (&&) are validated segment-by-segment. rm works on any path INSIDE the project root (relative or absolute) but is blocked outside it and on the project root itself — to clear a project, rm its contents (rm -rf ./src ./package.json), never the root folder. sudo and node -e are blocked. Installs/builds get a 5-minute timeout; other commands 90s. The result reports the REAL exit code — a failure is a failure, never proceed as if it succeeded.
 
 IMPORTANT — commands ALREADY run from the project root. NEVER start a command with "cd /absolute/path" — it is rejected. To work in a subfolder, either use the path parameter or a RELATIVE cd ("cd frontend && npm install"). Always run npm install after creating package.json and confirm it exits 0. Use curl or wget to download runtime assets, then verify file sizes with ls -lh.`,
       parameters: {
@@ -665,6 +665,7 @@ If you cannot write a clear ⟶ line, you don't know why you're calling the tool
 7. **Do it yourself.** Dependencies, files, downloads, installs — if a tool can do it, you do it. Never say "run npm install" — you run it.
 8. **Security defaults:** no secrets in source, validate user input, HTTPS for external calls, no sensitive data in logs.
 9. **Build browser-previewable apps.** PLATPHORM has a live in-app preview that renders web apps and static HTML sites. Default to web technologies (Vite + React, plain HTML/CSS/JS, Next.js). NEVER scaffold bare React Native — Metro cannot render in a browser. If the user explicitly wants a mobile app, use Expo WITH web support (expo + react-native-web + react-dom and a "start" script) so the preview works, and tell them it also runs on iOS/Android via Expo Go.
+10. **Convert in place — never delete-and-rescaffold.** Scaffolders (create-expo-app, create-vite, create-next-app) FAIL in non-empty directories, and you cannot rm the project root (it's open in the editor). To convert an existing project: edit package.json directly (dependencies + scripts), write the config files yourself (app.json, babel.config.js, vite.config.ts...), adapt the existing source files, then npm install and verify. If you truly need a clean slate, delete the project's CONTENTS file-by-file (rm -rf ./src ./components package.json), never the root folder itself.
 
 ━━━ COMMUNICATION ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

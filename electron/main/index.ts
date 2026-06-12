@@ -624,7 +624,8 @@ function registerIpcHandlers(): void {
   // Patterns that are never allowed, regardless of prefix allowlist.
   const BLOCKED_PATTERNS: Array<{ re: RegExp; reason: string }> = [
     { re: /\bsudo\b/,                          reason: 'sudo is not allowed' },
-    { re: /\brm\s+(-\w*[rf]\w*\s+)*(\/|~)/,    reason: 'rm targeting absolute or home paths is not allowed — rm only within the project' },
+    // rm is validated per-segment with cwd-aware containment in validateCommand —
+    // absolute paths INSIDE the project root are allowed, everything else blocked.
     { re: /\bnode\s+(-e|--eval|-p|--print)\b/, reason: 'node eval flags are not allowed — write a script file and run it' },
     { re: /\b(shutdown|reboot|halt|mkfs|dd)\b/, reason: 'system-level commands are not allowed' },
     { re: />\s*\/(etc|usr|bin|sbin|var|boot)\//, reason: 'redirecting output into system directories is not allowed' },
@@ -642,6 +643,37 @@ function registerIpcHandlers(): void {
     for (const seg of segments) {
       // `cd` segments: relative paths are always fine (cwd is already contained),
       // absolute paths are allowed ONLY if they resolve inside the project root.
+      // rm segments: every non-flag argument must resolve inside the project
+      // root. Relative paths are fine (cwd is contained); absolute paths are
+      // allowed only within the root; ~ and the root itself are blocked.
+      const rmMatch = seg.match(/^rm\s+(.+)$/)
+      if (rmMatch) {
+        const targets = rmMatch[1].split(/\s+/)
+          .map(t => t.replace(/^["']|["']$/g, ''))
+          .filter(t => t && !t.startsWith('-'))
+        if (!targets.length) return { ok: false, reason: 'rm with no target' }
+        const resolvedRoot = path.resolve(cwd)
+        for (const target of targets) {
+          if (target.startsWith('~')) {
+            return { ok: false, reason: `rm on home-relative path is not allowed: "${target}"` }
+          }
+          // Resolve relative targets against cwd; strip a trailing glob for the check.
+          const globless = target.replace(/[*?].*$/, '')
+          const resolved = path.resolve(path.isAbsolute(target) ? globless : path.join(cwd, globless))
+          const inside = resolved === resolvedRoot || resolved.startsWith(resolvedRoot + path.sep)
+          if (!inside) {
+            return { ok: false, reason: `rm outside the project root is not allowed: "${target}"` }
+          }
+          if (resolved === resolvedRoot && !/[*?]/.test(target)) {
+            return {
+              ok: false,
+              reason: `rm of the project root itself is not allowed — it is open in the editor. ` +
+                `Delete its CONTENTS instead (e.g. "rm -rf ./src ./App.tsx") or convert the project in place.`
+            }
+          }
+        }
+        continue
+      }
       const cdMatch = seg.match(/^cd\s+("[^"]+"|'[^']+'|\S+)$/)
       if (cdMatch) {
         const target = cdMatch[1].replace(/^["']|["']$/g, '')
