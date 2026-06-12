@@ -12,18 +12,51 @@ import Store from 'electron-store'
 const previewProcesses = new Map<string, { proc: ChildProcess; port: number; url: string }>()
 
 /**
+ * GUI-launched apps on macOS get a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+ * that often does NOT include npm/node (homebrew, nvm, volta, fnm installs).
+ * Augment PATH with the common install locations so spawned commands work
+ * whether PLATPHORM was launched from a terminal or by double-clicking.
+ */
+function processEnvWithFullPath(): NodeJS.ProcessEnv {
+  const home = os.homedir()
+  const extras = [
+    '/usr/local/bin',
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    path.join(home, '.volta', 'bin'),
+    path.join(home, '.fnm'),
+    path.join(home, 'n', 'bin'),
+    path.join(home, '.local', 'bin')
+  ]
+  // nvm: add the most recent installed node version's bin
+  try {
+    const nvmVersions = path.join(home, '.nvm', 'versions', 'node')
+    if (fs.existsSync(nvmVersions)) {
+      const versions = fs.readdirSync(nvmVersions).sort().reverse()
+      if (versions[0]) extras.unshift(path.join(nvmVersions, versions[0], 'bin'))
+    }
+  } catch {}
+  const current = process.env.PATH ?? ''
+  const merged = [...new Set([...current.split(':'), ...extras])].filter(Boolean).join(':')
+  return { ...process.env, PATH: merged }
+}
+
+/**
  * Run `npm install` in a directory and wait for it to finish.
  * Used by preview:start to auto-install deps before starting the dev server.
  * Timeout: 5 min — cold-cache installs legitimately take minutes; warm installs return fast.
  */
-function runNpmInstall(cwd: string): Promise<{ success: boolean; error?: string }> {
+function runNpmInstall(
+  cwd: string,
+  onOutput?: (line: string) => void
+): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
     const proc = spawn('npm', ['install', '--prefer-offline', '--no-audit', '--no-fund'], {
       cwd,
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
-        ...process.env,
+        ...processEnvWithFullPath(),
         // Suppress npm funding/audit noise so we get clean output
         NPM_CONFIG_FUND: '0',
         NPM_CONFIG_AUDIT: '0',
@@ -32,8 +65,14 @@ function runNpmInstall(cwd: string): Promise<{ success: boolean; error?: string 
     })
 
     let output = ''
-    proc.stdout?.on('data', (d: Buffer) => { output += d.toString() })
-    proc.stderr?.on('data', (d: Buffer) => { output += d.toString() })
+    const capture = (d: Buffer) => {
+      const text = d.toString()
+      output += text
+      const lastLine = text.trim().split('\n').pop()
+      if (lastLine && onOutput) onOutput(lastLine.slice(0, 120))
+    }
+    proc.stdout?.on('data', capture)
+    proc.stderr?.on('data', capture)
 
     const timeout = setTimeout(() => {
       try { proc.kill('SIGTERM') } catch {}
@@ -322,7 +361,13 @@ function registerIpcHandlers(): void {
   })
 
   // ── Live preview: spawn dev server ────────────────────────────────────────
-  ipcMain.handle('preview:start', async (_event, projectPath: string) => {
+  ipcMain.handle('preview:start', async (event, projectPath: string) => {
+    // Progress reporting — the renderer shows these so the user never stares
+    // at a dead spinner wondering what's happening.
+    const progress = (stage: string, detail?: string) => {
+      try { event.sender.send('preview:progress', { stage, detail }) } catch {}
+    }
+
     // Kill any existing server for this project
     const existing = previewProcesses.get(projectPath)
     if (existing) {
@@ -330,11 +375,12 @@ function registerIpcHandlers(): void {
       previewProcesses.delete(projectPath)
     }
 
+    progress('Scanning project for a runnable dev script…')
     const runnable = findRunnableProject(projectPath)
     if (!runnable) {
       return {
         success: false,
-        error: 'No runnable project found. Make sure the project has a package.json with a "dev" or "start" script and dependencies are installed (npm install).'
+        error: 'No runnable project found. The project needs a package.json with a "dev", "start", "serve" or "preview" script. Ask the AI to set one up.'
       }
     }
 
@@ -344,7 +390,10 @@ function registerIpcHandlers(): void {
     // The user should never have to run npm install manually — we do it for them.
     const nodeModulesPath = path.join(runnableCwd, 'node_modules')
     if (!fs.existsSync(nodeModulesPath)) {
-      const installResult = await runNpmInstall(runnableCwd)
+      progress('Installing dependencies (npm install)…', 'first run can take a few minutes')
+      const installResult = await runNpmInstall(runnableCwd, (line) => {
+        progress('Installing dependencies…', line)
+      })
       if (!installResult.success) {
         return {
           success: false,
@@ -353,16 +402,20 @@ function registerIpcHandlers(): void {
       }
     }
 
+    progress(`Starting dev server (${cmd} ${args.join(' ')})…`)
+
     // Snapshot ports that are already open BEFORE spawning — anything in this
     // set (including PLATPHORM's own dev server) must not be mistaken for the
     // user's server.
     const preExistingPorts = await snapshotOpenPorts()
 
     let startupError = ''
+    let procExited = false
+    let procExitCode: number | null = null
     const proc = spawn(cmd, args, {
       cwd: runnableCwd,
       env: {
-        ...process.env,
+        ...processEnvWithFullPath(),
         BROWSER: 'none',
         VITE_OPEN: 'false',
         NEXT_TELEMETRY_DISABLED: '1'
@@ -370,6 +423,7 @@ function registerIpcHandlers(): void {
       shell: true,
       stdio: ['ignore', 'pipe', 'pipe']
     })
+    proc.on('close', (code) => { procExited = true; procExitCode = code })
 
     // Capture startup output — used both to parse the server's printed URL and
     // to report errors if the server never opens a port.
@@ -382,6 +436,16 @@ function registerIpcHandlers(): void {
     // were already open — e.g. PLATPHORM's own dev server).
     await new Promise(r => setTimeout(r, 1500))
 
+    // If the process already died (command not found, crash on boot), fail
+    // fast with its output instead of polling ports for 30 futile seconds.
+    if (procExited && procExitCode !== 0) {
+      return {
+        success: false,
+        error: `Dev server exited immediately (code ${procExitCode}).\n\nServer output:\n${startupError.slice(0, 800).trim() || '(no output — the command may not exist on PATH)'}`
+      }
+    }
+
+    progress('Waiting for the dev server to open a port…')
     const port = await detectNewPort(28_500, preExistingPorts, () => startupError)   // 1.5s already spent = 30s total
 
     if (!port) {
@@ -391,7 +455,7 @@ function registerIpcHandlers(): void {
         : ''
       return {
         success: false,
-        error: `Dev server did not open a port within 30s. Make sure npm install is complete and the project has a dev script in package.json.${detail}`
+        error: `Dev server did not open a port within 30s.${procExited ? ` (process exited with code ${procExitCode})` : ''}${detail}`
       }
     }
 
@@ -525,7 +589,7 @@ function registerIpcHandlers(): void {
         cwd,
         shell: true,
         stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, NPM_CONFIG_FUND: '0', NPM_CONFIG_AUDIT: '0' }
+        env: { ...processEnvWithFullPath(), NPM_CONFIG_FUND: '0', NPM_CONFIG_AUDIT: '0' }
       })
 
       let output = ''

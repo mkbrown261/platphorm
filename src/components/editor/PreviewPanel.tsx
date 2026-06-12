@@ -36,9 +36,17 @@ type PreviewState =
 
 export function PreviewPanel() {
   const [preview, setPreview] = useState<PreviewState>({ status: 'idle' })
+  const [progress, setProgress] = useState<{ stage: string; detail?: string } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
   const webviewRef = useRef<any>(null)
   const { activeProject } = useProjectStore()
+
+  // Live startup progress from the main process — the user always sees what
+  // is happening (scanning / installing deps / starting server / waiting).
+  useEffect(() => {
+    const unsub = window.api.preview.onProgress?.((p) => setProgress(p))
+    return () => { unsub?.() }
+  }, [])
 
   // Check if a server is already running for this project on mount
   useEffect(() => {
@@ -61,16 +69,28 @@ export function PreviewPanel() {
 
   const startPreview = useCallback(async () => {
     if (!activeProject) return
+    setProgress(null)
     setPreview({ status: 'starting' })
+    // Client-side hard timeout: if the IPC call never resolves (worst case),
+    // surface an error after 6 minutes instead of spinning forever.
+    // (npm install alone can legitimately take ~5 min on a cold cache.)
+    const timeout = new Promise<{ success: false; error: string }>((resolve) =>
+      setTimeout(() => resolve({
+        success: false,
+        error: 'Preview startup timed out after 6 minutes. Check that npm works in this project from a terminal (npm install && npm run dev), then try again.'
+      }), 360_000)
+    )
     try {
-      const result = await window.api.preview.start(activeProject.rootPath)
-      if (result.success && result.url) {
+      const result = await Promise.race([window.api.preview.start(activeProject.rootPath), timeout])
+      if (result.success && 'url' in result && result.url) {
         setPreview({ status: 'running', url: result.url, port: result.port! })
       } else {
-        setPreview({ status: 'error', message: result.error ?? 'Failed to start dev server' })
+        setPreview({ status: 'error', message: ('error' in result ? result.error : undefined) ?? 'Failed to start dev server' })
       }
     } catch (err) {
       setPreview({ status: 'error', message: String(err) })
+    } finally {
+      setProgress(null)
     }
   }, [activeProject])
 
@@ -126,7 +146,7 @@ export function PreviewPanel() {
                   <span style={{ opacity: 0.35, fontSize: 10 }}>• live</span>
                 </span>
               : preview.status === 'starting'
-                ? <span style={{ color: 'rgba(245,158,11,0.7)', fontSize: 11, fontStyle: 'italic' }}>Starting dev server...</span>
+                ? <span style={{ color: 'rgba(245,158,11,0.7)', fontSize: 11, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{progress?.stage ?? 'Starting dev server...'}</span>
                 : preview.status === 'error'
                   ? <span style={{ color: 'rgba(239,68,68,0.7)', fontSize: 11 }}>Error — see details below</span>
                   : <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 11 }}>Server not running</span>
@@ -201,10 +221,12 @@ export function PreviewPanel() {
             <div style={{ ...styles.placeholderIcon, animation: 'spin 1.2s linear infinite' }}>
               <RefreshIcon />
             </div>
-            <div style={styles.placeholderTitle}>Starting dev server...</div>
+            <div style={styles.placeholderTitle}>{progress?.stage ?? 'Starting dev server...'}</div>
             <div style={styles.placeholderDesc}>
-              Running <code style={{ fontFamily: 'monospace', color: 'rgba(167,139,250,0.7)' }}>{detectScript(activeProject.rootPath)}</code>
-              <br />This usually takes 5–15 seconds.
+              {progress?.detail
+                ? <code style={{ fontFamily: 'monospace', fontSize: 11, color: 'rgba(167,139,250,0.7)', wordBreak: 'break-all' }}>{progress.detail}</code>
+                : <>First run installs dependencies automatically — that can take a few minutes.<br />After that, startup takes 5–15 seconds.</>
+              }
             </div>
           </div>
         )}
