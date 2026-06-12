@@ -1,6 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runIntentLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -30,7 +30,8 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'architect' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('intent') as Finding)
 
     if (parsed.isAmbiguous) {
       findings.push({
@@ -67,8 +68,8 @@ Respond in JSON:
 
     return {
       layer: 'intent',
-      status: findings.some((f) => f.severity === 'critical') ? 'failed' : 'passed',
-      score: parsed.score ?? 90,
+      status: findings.some((f) => f.severity === 'critical') ? 'failed' : ok ? 'passed' : 'warned',
+      score: clampScore(parsed.score, ok ? 90 : 60),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()

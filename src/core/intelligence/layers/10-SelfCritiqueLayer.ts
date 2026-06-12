@@ -1,6 +1,6 @@
 import type { Finding, LayerResult, PipelineContext, QualityScorecard } from '../../../types'
 import { orchestrator } from '../../providers/AIOrchestrator'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runSelfCritiqueLayer(
   context: PipelineContext,
@@ -69,7 +69,8 @@ Respond in JSON:
       role: 'architect',
       options: { temperature: 0.1 }
     })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('selfCritique') as Finding)
 
     for (const f of parsed.findings ?? []) {
       findings.push({
@@ -94,7 +95,7 @@ Respond in JSON:
       issues: []
     }
 
-    const approved = parsed.approved && !findings.some((f) => f.severity === 'critical')
+    const approved = ok && parsed.approved && !findings.some((f) => f.severity === 'critical')
 
     return {
       layer: 'selfCritique',

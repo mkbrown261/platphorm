@@ -14,7 +14,7 @@ const previewProcesses = new Map<string, { proc: ChildProcess; port: number; url
 /**
  * Run `npm install` in a directory and wait for it to finish.
  * Used by preview:start to auto-install deps before starting the dev server.
- * Timeout: 60s — --prefer-offline + --no-audit + --no-fund hits local cache fast.
+ * Timeout: 5 min — cold-cache installs legitimately take minutes; warm installs return fast.
  */
 function runNpmInstall(cwd: string): Promise<{ success: boolean; error?: string }> {
   return new Promise((resolve) => {
@@ -37,8 +37,8 @@ function runNpmInstall(cwd: string): Promise<{ success: boolean; error?: string 
 
     const timeout = setTimeout(() => {
       try { proc.kill('SIGTERM') } catch {}
-      resolve({ success: false, error: `npm install timed out after 60s.\n${output.slice(0, 500)}` })
-    }, 60_000)
+      resolve({ success: false, error: `npm install timed out after 5 minutes.\n${output.slice(-500)}` })
+    }, 300_000)
 
     proc.on('close', (code) => {
       clearTimeout(timeout)
@@ -397,49 +397,112 @@ function registerIpcHandlers(): void {
   })
 
   // ── shell:runCommand — executes a shell command in a project directory ────
-  // Used by the agent for: npm run build, npx tsc --noEmit, git status, etc.
-  // Allowlisted commands only — no arbitrary shell access.
+  // Used by the agent for: npm install, npx tsc --noEmit, git status, etc.
+  //
+  // Security model:
+  // 1. The command is split on shell separators (&&, ||, ;, |) and EVERY
+  //    segment must start with an allowlisted prefix — a single allowed prefix
+  //    can no longer smuggle a second arbitrary command behind it.
+  // 2. Destructive patterns are explicitly blocked regardless of allowlist
+  //    (rm targeting paths outside cwd, sudo, shutdown, eval-style node, etc.).
+  // 3. Real exit codes are reported. A non-zero exit is success:false — the
+  //    agent must never be told a failed install/build succeeded.
   const ALLOWED_COMMAND_PREFIXES = [
-    'npm ', 'npx ', 'yarn ', 'pnpm ',
-    'git status', 'git diff', 'git log',
-    'node --version', 'node -v',
-    'node ', 'which ', 'ls ', 'cat ',
+    'npm ', 'npx ', 'yarn ', 'pnpm ', 'node ',
+    'git status', 'git diff', 'git log', 'git add', 'git commit', 'git init',
+    'which ', 'ls', 'cat ', 'head ', 'tail ', 'wc ',
     'curl ', 'wget ',
     'mkdir ', 'cp ', 'mv ', 'rm ',
     'touch ', 'echo ', 'find ', 'grep '
   ]
 
+  // Patterns that are never allowed, regardless of prefix allowlist.
+  const BLOCKED_PATTERNS: Array<{ re: RegExp; reason: string }> = [
+    { re: /\bsudo\b/,                          reason: 'sudo is not allowed' },
+    { re: /\brm\s+(-\w*[rf]\w*\s+)*(\/|~)/,    reason: 'rm targeting absolute or home paths is not allowed — rm only within the project' },
+    { re: /\bnode\s+(-e|--eval|-p|--print)\b/, reason: 'node eval flags are not allowed — write a script file and run it' },
+    { re: /\b(shutdown|reboot|halt|mkfs|dd)\b/, reason: 'system-level commands are not allowed' },
+    { re: />\s*\/(etc|usr|bin|sbin|var|boot)\//, reason: 'redirecting output into system directories is not allowed' },
+    { re: /\bchmod\s+777\b/,                   reason: 'chmod 777 is not allowed' },
+    { re: /\$\(|`/,                            reason: 'command substitution is not allowed' }
+  ]
+
+  function validateCommand(command: string): { ok: boolean; reason?: string } {
+    for (const { re, reason } of BLOCKED_PATTERNS) {
+      if (re.test(command)) return { ok: false, reason }
+    }
+    // Validate every segment of a chained command, not just the first.
+    const segments = command.split(/&&|\|\||;|\|/).map(s => s.trim()).filter(Boolean)
+    if (!segments.length) return { ok: false, reason: 'empty command' }
+    for (const seg of segments) {
+      // Allow `cd <dir>` as a chain segment so `cd sub && npm install` works,
+      // but only relative paths (no escaping to absolute system paths).
+      if (/^cd\s+(?!\/|~)\S+$/.test(seg)) continue
+      const allowed = ALLOWED_COMMAND_PREFIXES.some(p =>
+        seg.startsWith(p) || seg === p.trim()
+      )
+      if (!allowed) return { ok: false, reason: `segment not in allowlist: "${seg.slice(0, 60)}"` }
+    }
+    return { ok: true }
+  }
+
+  // Long-running operations (installs, builds) legitimately exceed 60s on cold
+  // caches. 5 minutes for those; 90s for everything else.
+  function commandTimeout(command: string): number {
+    return /\b(install|build|create|init|add)\b/.test(command) ? 300_000 : 90_000
+  }
+
   ipcMain.handle('shell:runCommand', async (_event, cwd: string, command: string) => {
-    const allowed = ALLOWED_COMMAND_PREFIXES.some(p => command.trimStart().startsWith(p))
-    if (!allowed) {
-      return { success: false, error: `Command not in allowlist: ${command}` }
+    const verdict = validateCommand(command)
+    if (!verdict.ok) {
+      return { success: false, error: `Command rejected: ${verdict.reason}` }
+    }
+    // Containment: cwd must exist and be a directory.
+    if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+      return { success: false, error: `Working directory does not exist: ${cwd}` }
     }
 
-    return new Promise<{ success: boolean; output?: string; error?: string }>((resolve) => {
+    return new Promise<{ success: boolean; output?: string; error?: string; exitCode?: number }>((resolve) => {
       const proc = spawn(command, [], {
         cwd,
         shell: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: { ...process.env, NPM_CONFIG_FUND: '0', NPM_CONFIG_AUDIT: '0' }
       })
 
       let output = ''
       proc.stdout?.on('data', (d: Buffer) => { output += d.toString() })
       proc.stderr?.on('data', (d: Buffer) => { output += d.toString() })
 
-      // 60s timeout — warm cache installs are fast; cold installs should still complete.
+      const ms = commandTimeout(command)
       const timeout = setTimeout(() => {
-        proc.kill('SIGTERM')
-        resolve({ success: false, error: 'Command timed out after 60s', output: output.slice(0, 2000) })
-      }, 60_000)
+        try { proc.kill('SIGTERM') } catch {}
+        resolve({
+          success: false,
+          error: `Command timed out after ${Math.round(ms / 1000)}s`,
+          output: output.slice(-2000)
+        })
+      }, ms)
 
       proc.on('close', (code) => {
         clearTimeout(timeout)
-        resolve({ success: true, output: output.slice(0, 3000) })
+        // Honest exit codes — a non-zero exit is a FAILURE. The agent must see
+        // the real outcome or it will build on top of broken installs.
+        if (code === 0) {
+          resolve({ success: true, output: output.slice(-3000), exitCode: 0 })
+        } else {
+          resolve({
+            success: false,
+            exitCode: code ?? -1,
+            error: `Command exited with code ${code}`,
+            output: output.slice(-3000)
+          })
+        }
       })
 
       proc.on('error', (err) => {
         clearTimeout(timeout)
-        resolve({ success: false, error: String(err), output })
+        resolve({ success: false, error: String(err), output: output.slice(-2000) })
       })
     })
   })

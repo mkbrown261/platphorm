@@ -1,6 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
-import { safeParseJSON } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 // Well-known package-name patterns mentioned in natural language prompts.
 // Covers common npm ecosystem references so we can surface dependency risk even
@@ -131,7 +131,8 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'backend' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('dependency') as Finding)
 
     for (const f of (parsed.findings ?? []) as any[]) {
       findings.push({
@@ -150,7 +151,7 @@ Respond in JSON:
     return {
       layer: 'dependency',
       status: hasBlocker ? 'failed' : findings.length > 0 ? 'warned' : 'passed',
-      score: typeof parsed.score === 'number' ? parsed.score : 90,
+      score: clampScore(parsed.score, ok ? 90 : 60),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()

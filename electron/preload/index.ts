@@ -43,7 +43,7 @@ const api = {
     runCommand: (
       cwd: string,
       command: string
-    ): Promise<{ success: boolean; output?: string; error?: string }> =>
+    ): Promise<{ success: boolean; output?: string; error?: string; exitCode?: number }> =>
       ipcRenderer.invoke('shell:runCommand', cwd, command)
   }
 }

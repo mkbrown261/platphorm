@@ -1,6 +1,6 @@
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
 import { orchestrator } from '../../providers/AIOrchestrator'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runObservabilityLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -44,7 +44,8 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'backend' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('observability') as Finding)
 
     if (!parsed.hasStructuredLogging) {
       findings.push({
@@ -84,7 +85,7 @@ Respond in JSON:
     return {
       layer: 'observability',
       status: findings.some((f) => f.severity === 'high') ? 'warned' : 'passed',
-      score: parsed.score ?? 80,
+      score: clampScore(parsed.score, ok ? 80 : 60),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()

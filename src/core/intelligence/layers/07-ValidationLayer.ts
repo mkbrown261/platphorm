@@ -1,6 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runValidationLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -42,7 +42,8 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'backend' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('validation') as Finding)
 
     if (parsed.hasPlaceholders) {
       findings.push({
@@ -84,7 +85,7 @@ Respond in JSON:
     return {
       layer: 'validation',
       status: hasBlocker ? 'failed' : findings.length > 0 ? 'warned' : 'passed',
-      score: parsed.score ?? 88,
+      score: clampScore(parsed.score, ok ? 88 : 60),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()

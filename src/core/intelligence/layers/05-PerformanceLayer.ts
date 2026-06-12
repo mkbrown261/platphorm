@@ -1,6 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PerformanceFinding, PipelineContext } from '../../../types'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runPerformanceLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -70,7 +70,8 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'performance' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('performance') as Finding)
 
     for (const f of parsed.findings ?? []) {
       findings.push({
@@ -91,7 +92,7 @@ Respond in JSON:
     return {
       layer: 'performance',
       status: findings.some((f) => f.severity === 'high') ? 'warned' : 'passed',
-      score: parsed.score ?? 85,
+      score: clampScore(parsed.score, ok ? 85 : 60),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()

@@ -46,7 +46,7 @@ interface Window {
     // We use safe IPC-based routes for all shell operations.
     shell: {
       openExternal: (url: string) => Promise<{ success: boolean; error?: string }>
-      runCommand: (cwd: string, command: string) => Promise<{ success: boolean; output?: string; error?: string }>
+      runCommand: (cwd: string, command: string) => Promise<{ success: boolean; output?: string; error?: string; exitCode?: number }>
     }
   }
   electron: {

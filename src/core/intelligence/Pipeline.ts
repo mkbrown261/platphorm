@@ -165,10 +165,18 @@ export async function runPipeline(
   auditLayer(obsResult, pipelineId)
   notify(8, obsResult)
 
-  // ── Layer 10: Self-Critique (runs on generated content from Layer 8) ──
-  const generatedContent = executionPlan?.changes?.map(c => c.after ?? '').join('\n\n') ?? ''
+  // ── Layer 10: Self-Critique (critiques the execution PLAN from Layer 8) ──
+  // Layer 8 is plan-only now — it describes file changes without generating
+  // contents. Self-critique evaluates the plan; the agent's actual code is
+  // verified after writing via get_diagnostics in the agent loop.
+  const planSummary = executionPlan?.changes?.length
+    ? executionPlan.changes
+        .map(c => `${c.type.toUpperCase()} ${c.path} — ${c.reason ?? ''}`)
+        .join('\n')
+      + `\nRisk: ${executionPlan.estimatedRisk} · Reversible: ${executionPlan.reversible} · Rollback: ${executionPlan.rollbackPlan}`
+    : ''
   notify(9)
-  const critiqueResult = await runSelfCritiqueLayer(context, generatedContent)
+  const critiqueResult = await runSelfCritiqueLayer(context, planSummary)
   if ('scorecard' in critiqueResult) scorecard = critiqueResult.scorecard
   layers.push(critiqueResult)
   auditLayer(critiqueResult, pipelineId)
@@ -200,7 +208,9 @@ export async function runPipeline(
     approved,
     blockers,
     warnings,
-    validatedCode: generatedContent,
+    // No pre-generated code anymore — the agent writes real code after approval
+    // and verifies it with get_diagnostics. validatedCode stays for type compat.
+    validatedCode: undefined,
     executionPlan,
     durationMs: Date.now() - pipelineStart
   }

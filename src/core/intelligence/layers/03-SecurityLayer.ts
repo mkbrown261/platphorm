@@ -1,6 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext, SecurityFinding } from '../../../types'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 const SECURITY_PATTERNS = [
   { pattern: /hardcoded.*key|api[_-]?key\s*=\s*["'][^"']+["']/i, label: 'Hardcoded API key' },
@@ -78,7 +78,8 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'security' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('security') as Finding)
 
     for (const f of parsed.findings ?? []) {
       findings.push({
@@ -100,7 +101,7 @@ Respond in JSON:
     return {
       layer: 'security',
       status: hasBlocker ? 'failed' : findings.some((f) => f.severity === 'high') ? 'warned' : 'passed',
-      score: parsed.score ?? 85,
+      score: clampScore(parsed.score, ok ? 85 : 55),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()

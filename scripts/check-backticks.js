@@ -1,42 +1,38 @@
 #!/usr/bin/env node
-// Checks that the template literal string in buildAgentSystemPrompt()
-// contains no unescaped backticks that would break esbuild.
-// Run before committing changes to AgentRunner.ts.
+// Validates that AgentRunner.ts parses cleanly — catches unescaped backticks
+// or any other syntax breakage in the big template literal.
+//
+// The previous version of this script used a regex that could not distinguish
+// backticks inside ${...} interpolations (valid nested template literals) from
+// genuinely unescaped backticks — producing false positives on valid code.
+// We now use the TypeScript compiler's own parser, which is always right.
 
-const fs = require('fs')
 const path = require('path')
+const ts = require(path.join(__dirname, '../node_modules/typescript'))
+const fs = require('fs')
 
 const file = path.join(__dirname, '../src/core/intelligence/AgentRunner.ts')
 const src = fs.readFileSync(file, 'utf8')
-const lines = src.split('\n')
 
-// Find the start of the return template literal in buildAgentSystemPrompt
-const startLine = lines.findIndex(l => l.includes('return `You are PLATPHORM'))
-const endLine   = lines.findIndex((l, i) => i > startLine && l.match(/^}$/))
+const result = ts.transpileModule(src, {
+  reportDiagnostics: true,
+  compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.Preserve }
+})
 
-if (startLine === -1) {
-  console.error('ERROR: Could not find buildAgentSystemPrompt return statement')
-  process.exit(1)
-}
+const syntaxErrors = (result.diagnostics ?? []).filter(
+  d => d.category === ts.DiagnosticCategory.Error
+)
 
-let errors = 0
-for (let i = startLine; i <= endLine; i++) {
-  const line = lines[i]
-  // Find unescaped backticks: backtick not preceded by backslash,
-  // and not at the very start/end of the template literal delimiters
-  const matches = [...line.matchAll(/(?<!\\)`/g)]
-  for (const m of matches) {
-    // Skip the opening backtick on the return line and closing on end line
-    if (i === startLine && m.index === line.indexOf('`')) continue
-    if (i === endLine) continue
-    console.error(`UNESCAPED BACKTICK at line ${i + 1}, col ${m.index}: ${line.trim().slice(0, 80)}`)
-    errors++
+if (syntaxErrors.length) {
+  for (const d of syntaxErrors) {
+    const { line, character } = d.file
+      ? d.file.getLineAndCharacterOfPosition(d.start)
+      : { line: 0, character: 0 }
+    const msg = ts.flattenDiagnosticMessageText(d.messageText, '\n')
+    console.error(`SYNTAX ERROR at line ${line + 1}, col ${character + 1}: ${msg}`)
   }
+  console.error(`\n${syntaxErrors.length} syntax error(s) found in AgentRunner.ts.`)
+  process.exit(1)
 }
 
-if (errors > 0) {
-  console.error(`\n${errors} unescaped backtick(s) found. Replace them with \\` + '`' + ` in the template literal.`)
-  process.exit(1)
-} else {
-  console.log('✓ No unescaped backticks in AgentRunner.ts template literal')
-}
+console.log('AgentRunner.ts parses cleanly.')
