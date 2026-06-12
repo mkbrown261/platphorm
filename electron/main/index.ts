@@ -46,6 +46,36 @@ function killProcessTree(proc?: ChildProcess): void {
   } catch {}
 }
 
+/**
+ * Probe what a dev server actually serves at its root.
+ * Detects the "Expo manifest JSON instead of a web page" failure mode —
+ * Metro serves its native-app manifest at / when web output isn't properly
+ * configured (e.g. deprecated webpack bundler in app.json), which would
+ * otherwise render raw JSON in the preview.
+ */
+function probeRootContent(port: number): Promise<'html' | 'expo-manifest' | 'other' | 'unreachable'> {
+  const http = require('http') as typeof import('http')
+  return new Promise((resolve) => {
+    const req = http.get(
+      { host: '127.0.0.1', port, path: '/', headers: { Accept: 'text/html' }, timeout: 4000 },
+      (res) => {
+        let body = ''
+        res.on('data', (d: Buffer) => { body += d.toString(); if (body.length > 4096) req.destroy() })
+        res.on('end', () => {
+          const ct = String(res.headers['content-type'] ?? '')
+          if (ct.includes('text/html') || /^\s*<(!doctype|html)/i.test(body)) return resolve('html')
+          if (body.includes('"expoClient"') || (body.includes('"runtimeVersion"') && body.includes('"launchAsset"'))) {
+            return resolve('expo-manifest')
+          }
+          resolve('other')
+        })
+      }
+    )
+    req.on('error', () => resolve('unreachable'))
+    req.on('timeout', () => { req.destroy(); resolve('unreachable') })
+  })
+}
+
 /** Ask the OS for a free port. */
 function getFreePort(): Promise<number> {
   const net = require('net') as typeof import('net')
@@ -639,6 +669,29 @@ function registerIpcHandlers(): void {
       return {
         success: false,
         error: `Dev server did not open a port within 30s.${procExited ? ` (process exited with code ${procExitCode})` : ''}${detail}`
+      }
+    }
+
+    // Content sanity check — catching Metro's native manifest JSON here turns
+    // "the preview shows gibberish JSON" into an actionable error message.
+    progress('Checking the server is serving a web page…')
+    let content = await probeRootContent(port)
+    if (content === 'expo-manifest') {
+      // Give the web bundle a few more seconds — first web build can lag behind
+      // the manifest endpoint coming up.
+      for (let i = 0; i < 5 && content === 'expo-manifest'; i++) {
+        await new Promise(r => setTimeout(r, 2000))
+        content = await probeRootContent(port)
+      }
+    }
+    if (content === 'expo-manifest') {
+      killProcessTree(proc)
+      return {
+        success: false,
+        error: 'The server is serving Expo\'s native-app manifest instead of a web page — web output is not configured correctly. ' +
+          'Ask the AI to: (1) set "web": { "bundler": "metro" } in app.json (webpack is deprecated and serves no web page), ' +
+          '(2) run npx expo install @expo/metro-runtime react-dom react-native-web, ' +
+          '(3) verify with npx expo export --platform web that the web build compiles.'
       }
     }
 
