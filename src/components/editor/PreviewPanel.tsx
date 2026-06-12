@@ -15,6 +15,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useProjectStore } from '../../store/projectStore'
 
+// <webview> is an Electron-specific element — declare it for TSX.
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement> & {
+        src?: string
+        allowpopups?: string
+        partition?: string
+      }, HTMLElement>
+    }
+  }
+}
+
 type PreviewState =
   | { status: 'idle' }
   | { status: 'starting' }
@@ -104,10 +117,14 @@ export function PreviewPanel() {
             boxShadow: preview.status === 'running' ? '0 0 6px #22c55e' : 'none',
             transition: 'all 0.3s'
           }} />
-          {/* URL bar */}
-          <div style={styles.urlBar}>
+          {/* Branded address bar — shows the app identity, not a raw localhost URL */}
+          <div style={styles.urlBar} title={preview.status === 'running' ? preview.url : undefined}>
             {preview.status === 'running'
-              ? <span style={{ color: 'rgba(167,139,250,0.7)', fontFamily: 'monospace', fontSize: 11 }}>{preview.url}</span>
+              ? <span style={{ color: 'rgba(167,139,250,0.85)', fontFamily: 'monospace', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ opacity: 0.45 }}>platphorm ›</span>
+                  <span>{activeProject.name ?? activeProject.rootPath.split('/').pop()}</span>
+                  <span style={{ opacity: 0.35, fontSize: 10 }}>• live</span>
+                </span>
               : preview.status === 'starting'
                 ? <span style={{ color: 'rgba(245,158,11,0.7)', fontSize: 11, fontStyle: 'italic' }}>Starting dev server...</span>
                 : preview.status === 'error'
@@ -120,7 +137,10 @@ export function PreviewPanel() {
         <div style={styles.toolbarRight}>
           {preview.status === 'running' && (
             <>
-              <ToolBtn onClick={openExternal} title="Open in browser">
+              <ToolBtn onClick={refresh} title="Reload preview">
+                <RefreshIcon />
+              </ToolBtn>
+              <ToolBtn onClick={openExternal} title="Open in external browser">
                 <ExternalIcon />
               </ToolBtn>
               <ToolBtn onClick={stopPreview} title="Stop server" danger>
@@ -143,26 +163,22 @@ export function PreviewPanel() {
       {/* Content area */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {preview.status === 'running' && (
-          // Electron blocks cross-origin iframes (file:// → localhost:PORT).
-          // Show the URL with a prominent "Open in Browser" button instead —
-          // the system browser has no such restriction.
-          <div style={styles.placeholder}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>🚀</div>
-            <div style={styles.placeholderTitle}>Dev server running</div>
-            <div style={{ fontFamily: 'monospace', fontSize: 13, color: 'rgba(167,139,250,0.8)', background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', padding: '6px 14px', borderRadius: 8, marginTop: 4 }}>
-              {preview.url}
-            </div>
-            <div style={{ ...styles.placeholderDesc, marginTop: 6 }}>
-              Click below to open in your browser — hot reload works there too.
-            </div>
-            <button
-              onClick={() => window.api.shell.openExternal(preview.url).catch(() => {})}
-              style={{ ...styles.startBtnLarge, marginTop: 16 }}
-            >
-              <ExternalIcon />
-              Open in Browser
-            </button>
-          </div>
+          // Embedded browser: <webview> runs the user's site in its own process
+          // with zero cross-origin restrictions — the page renders right here,
+          // with hot reload, exactly like an in-app browser tab.
+          <webview
+            key={refreshKey}
+            ref={webviewRef}
+            src={preview.url}
+            allowpopups="true"
+            style={{
+              display: 'inline-flex',
+              width: '100%',
+              height: '100%',
+              border: 'none',
+              background: '#ffffff'
+            }}
+          />
         )}
 
         {preview.status === 'idle' && (

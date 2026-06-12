@@ -151,7 +151,7 @@ RULES (enforced — violations throw):
       name: 'run_command',
       description: `Run a shell command in the project. Allowed: npm, npx, yarn, pnpm, node, git status/diff/log/add/commit/init, curl, wget, mkdir, cp, mv, rm, touch, echo, find, grep, ls, cat, head, tail, wc, which. Chained commands (&&) are validated segment-by-segment. Destructive operations (rm on absolute/home paths, sudo, node -e) are blocked in code. Installs/builds get a 5-minute timeout; other commands 90s. The result reports the REAL exit code — a failure is a failure, never proceed as if it succeeded.
 
-IMPORTANT — always run npm install after creating package.json and confirm it exits 0. Use curl or wget to download runtime assets, then verify file sizes with ls -lh. Use the path parameter to run in a subdirectory when the project lives in a subfolder.`,
+IMPORTANT — commands ALREADY run from the project root. NEVER start a command with "cd /absolute/path" — it is rejected. To work in a subfolder, either use the path parameter or a RELATIVE cd ("cd frontend && npm install"). Always run npm install after creating package.json and confirm it exits 0. Use curl or wget to download runtime assets, then verify file sizes with ls -lh.`,
       parameters: {
         type: 'object',
         properties: {
@@ -503,7 +503,10 @@ async function executeTool(
       }
       // Use the explicit path if provided, otherwise fall back to the project root.
       // This lets the AI run npm install in a subfolder when needed.
-      const runCwd = args.path ? resolvePath(args.path, projectPath) : projectPath
+      // Containment: the cwd must resolve inside the project root.
+      const runCwd = args.path
+        ? enforceContainment(resolvePath(args.path, projectPath), projectPath, 'run_command')
+        : projectPath
       const r = await shell.runCommand(runCwd, args.command)
       if (!r.success) {
         // Honest failure — includes the real exit code and the TAIL of the output

@@ -124,16 +124,50 @@ function isPortOpen(port: number): Promise<boolean> {
   })
 }
 
+// Common dev-server ports. Vite: 5173 (+5174... when busy). Next/CRA: 3000.
+const CANDIDATE_PORTS = [5173, 5174, 5175, 3000, 3001, 3002, 4000, 4173, 8080, 8000, 8888, 5000, 5001, 4321]
+
+/** Snapshot which candidate ports are ALREADY open (e.g. PLATPHORM's own dev server). */
+async function snapshotOpenPorts(): Promise<Set<number>> {
+  const open = new Set<number>()
+  await Promise.all(CANDIDATE_PORTS.map(async (p) => {
+    if (await isPortOpen(p)) open.add(p)
+  }))
+  return open
+}
+
+/** Try to parse the dev server's printed URL (Vite/Next/CRA all print one). */
+function parsePortFromOutput(output: string): number | null {
+  const m = output.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})/)
+  if (m) {
+    const port = parseInt(m[1], 10)
+    if (port > 0 && port < 65536) return port
+  }
+  return null
+}
+
 /**
- * Poll a list of common dev-server ports until one responds or timeout.
- * Returns the first open port, or null.
- * Vite default: 5173. Next: 3000. CRA: 3000. Most others: 3000/8080/4000.
+ * Poll for a NEWLY opened dev-server port until timeout.
+ * `ignore` is the set of ports that were already open before we spawned the
+ * server — critically, this excludes PLATPHORM's own dev server (5173 in dev
+ * mode), which previously caused the preview to "detect" PLATPHORM itself and
+ * render a blank screen.
+ * `getOutput` lets us check the server's own printed URL first — the most
+ * reliable signal, and it catches ports outside the candidate list.
  */
-async function detectOpenPort(timeoutMs: number): Promise<number | null> {
-  const PORTS = [5173, 3000, 3001, 4000, 4173, 8080, 8000, 8888, 5000, 5001, 4321]
+async function detectNewPort(
+  timeoutMs: number,
+  ignore: Set<number>,
+  getOutput: () => string
+): Promise<number | null> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
-    for (const port of PORTS) {
+    // 1. Most reliable: the URL the server itself printed
+    const printed = parsePortFromOutput(getOutput())
+    if (printed && !ignore.has(printed) && await isPortOpen(printed)) return printed
+    // 2. Fallback: scan candidate ports, skipping pre-existing ones
+    for (const port of CANDIDATE_PORTS) {
+      if (ignore.has(port)) continue
       if (await isPortOpen(port)) return port
     }
     await new Promise(r => setTimeout(r, 500))
@@ -171,7 +205,7 @@ function createWindow(): void {
       preload: join(__dirname, '../preload/index.js'),
       sandbox: false,
       contextIsolation: true,
-      webviewTag: false,        // using iframe instead of webview for preview
+      webviewTag: true,         // <webview> renders the live preview in-app (own process, no cross-origin iframe limits)
     }
   })
 
@@ -319,6 +353,11 @@ function registerIpcHandlers(): void {
       }
     }
 
+    // Snapshot ports that are already open BEFORE spawning — anything in this
+    // set (including PLATPHORM's own dev server) must not be mistaken for the
+    // user's server.
+    const preExistingPorts = await snapshotOpenPorts()
+
     let startupError = ''
     const proc = spawn(cmd, args, {
       cwd: runnableCwd,
@@ -332,17 +371,18 @@ function registerIpcHandlers(): void {
       stdio: ['ignore', 'pipe', 'pipe']
     })
 
-    // Capture startup output so we can report errors if the server never opens a port
+    // Capture startup output — used both to parse the server's printed URL and
+    // to report errors if the server never opens a port.
     proc.stdout?.on('data', (d: Buffer) => { startupError += d.toString().slice(0, 500) })
     proc.stderr?.on('data', (d: Buffer) => { startupError += d.toString().slice(0, 500) })
     proc.on('error', () => {})   // prevent unhandled error crashes
 
-    // Give the process 1.5s to start, then poll common ports every 500ms.
-    // This works regardless of what the server prints — Vite (5173), Next (3000),
-    // CRA (3000), Express, etc. We just find whatever port opened.
+    // Give the process 1.5s to start, then detect the NEW port (parsed from the
+    // server's own output first, then candidate-port scan excluding ports that
+    // were already open — e.g. PLATPHORM's own dev server).
     await new Promise(r => setTimeout(r, 1500))
 
-    const port = await detectOpenPort(28_500)   // 1.5s already spent above = 30s total
+    const port = await detectNewPort(28_500, preExistingPorts, () => startupError)   // 1.5s already spent = 30s total
 
     if (!port) {
       try { proc.kill('SIGTERM') } catch {}
@@ -427,7 +467,7 @@ function registerIpcHandlers(): void {
     { re: /\$\(|`/,                            reason: 'command substitution is not allowed' }
   ]
 
-  function validateCommand(command: string): { ok: boolean; reason?: string } {
+  function validateCommand(command: string, cwd: string): { ok: boolean; reason?: string } {
     for (const { re, reason } of BLOCKED_PATTERNS) {
       if (re.test(command)) return { ok: false, reason }
     }
@@ -435,9 +475,27 @@ function registerIpcHandlers(): void {
     const segments = command.split(/&&|\|\||;|\|/).map(s => s.trim()).filter(Boolean)
     if (!segments.length) return { ok: false, reason: 'empty command' }
     for (const seg of segments) {
-      // Allow `cd <dir>` as a chain segment so `cd sub && npm install` works,
-      // but only relative paths (no escaping to absolute system paths).
-      if (/^cd\s+(?!\/|~)\S+$/.test(seg)) continue
+      // `cd` segments: relative paths are always fine (cwd is already contained),
+      // absolute paths are allowed ONLY if they resolve inside the project root.
+      const cdMatch = seg.match(/^cd\s+("[^"]+"|'[^']+'|\S+)$/)
+      if (cdMatch) {
+        const target = cdMatch[1].replace(/^["']|["']$/g, '')
+        if (target.startsWith('~')) {
+          return { ok: false, reason: `cd into home-relative path is not allowed: "${target}"` }
+        }
+        if (path.isAbsolute(target)) {
+          const resolvedTarget = path.resolve(target)
+          const resolvedRoot = path.resolve(cwd)
+          if (resolvedTarget !== resolvedRoot && !resolvedTarget.startsWith(resolvedRoot + path.sep)) {
+            return {
+              ok: false,
+              reason: `cd outside the project root is not allowed: "${target}". ` +
+                `Commands already run from the project root (${cwd}) — use relative paths, e.g. "cd subfolder && npm install".`
+            }
+          }
+        }
+        continue
+      }
       const allowed = ALLOWED_COMMAND_PREFIXES.some(p =>
         seg.startsWith(p) || seg === p.trim()
       )
@@ -453,7 +511,7 @@ function registerIpcHandlers(): void {
   }
 
   ipcMain.handle('shell:runCommand', async (_event, cwd: string, command: string) => {
-    const verdict = validateCommand(command)
+    const verdict = validateCommand(command, cwd)
     if (!verdict.ok) {
       return { success: false, error: `Command rejected: ${verdict.reason}` }
     }
