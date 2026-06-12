@@ -4,7 +4,11 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    // electron-store v10+ is ESM-only; exclude it from externalization so it
+    // gets bundled into the CJS main output instead of require()'d at runtime
+    // (a raw require of an ESM package yields a namespace object, not the
+    // Store constructor → "TypeError: Store is not a constructor").
+    plugins: [externalizeDepsPlugin({ exclude: ['electron-store'] })],
     build: {
       lib: {
         entry: resolve('electron/main/index.ts')
