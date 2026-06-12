@@ -15,6 +15,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useProjectStore } from '../../store/projectStore'
 
+// <webview> is an Electron-specific element — declare it for TSX.
+declare global {
+  namespace JSX {
+    interface IntrinsicElements {
+      webview: React.DetailedHTMLProps<React.HTMLAttributes<HTMLElement> & {
+        src?: string
+        allowpopups?: string
+        partition?: string
+      }, HTMLElement>
+    }
+  }
+}
+
 type PreviewState =
   | { status: 'idle' }
   | { status: 'starting' }
@@ -23,9 +36,38 @@ type PreviewState =
 
 export function PreviewPanel() {
   const [preview, setPreview] = useState<PreviewState>({ status: 'idle' })
+  const [progress, setProgress] = useState<{ stage: string; detail?: string } | null>(null)
   const [refreshKey, setRefreshKey] = useState(0)
+  const [consoleErrors, setConsoleErrors] = useState<string[]>([])
   const webviewRef = useRef<any>(null)
   const { activeProject } = useProjectStore()
+
+  // Capture runtime JS errors from the previewed page. A white screen is
+  // almost always a crash in the page's console — invisible unless we
+  // surface it here where the user (and the AI) can actually see it.
+  useEffect(() => {
+    const wv = webviewRef.current
+    if (!wv || preview.status !== 'running') return
+    const onConsole = (e: any) => {
+      // level 3 = error in Electron's console-message event
+      if (e.level === 3 || e.level === 'error') {
+        const msg = `${e.message}${e.sourceId ? ` (${String(e.sourceId).split('/').pop()}:${e.line})` : ''}`
+        setConsoleErrors(prev => prev.includes(msg) ? prev : [...prev.slice(-9), msg])
+      }
+    }
+    wv.addEventListener('console-message', onConsole)
+    return () => { wv.removeEventListener('console-message', onConsole) }
+  }, [preview.status, refreshKey])
+
+  // Clear captured errors on refresh / restart
+  useEffect(() => { setConsoleErrors([]) }, [refreshKey, preview.status])
+
+  // Live startup progress from the main process — the user always sees what
+  // is happening (scanning / installing deps / starting server / waiting).
+  useEffect(() => {
+    const unsub = window.api.preview.onProgress?.((p) => setProgress(p))
+    return () => { unsub?.() }
+  }, [])
 
   // Check if a server is already running for this project on mount
   useEffect(() => {
@@ -48,16 +90,28 @@ export function PreviewPanel() {
 
   const startPreview = useCallback(async () => {
     if (!activeProject) return
+    setProgress(null)
     setPreview({ status: 'starting' })
+    // Client-side hard timeout: if the IPC call never resolves (worst case),
+    // surface an error after 6 minutes instead of spinning forever.
+    // (npm install alone can legitimately take ~5 min on a cold cache.)
+    const timeout = new Promise<{ success: false; error: string }>((resolve) =>
+      setTimeout(() => resolve({
+        success: false,
+        error: 'Preview startup timed out after 6 minutes. Check that npm works in this project from a terminal (npm install && npm run dev), then try again.'
+      }), 360_000)
+    )
     try {
-      const result = await window.api.preview.start(activeProject.rootPath)
-      if (result.success && result.url) {
+      const result = await Promise.race([window.api.preview.start(activeProject.rootPath), timeout])
+      if (result.success && 'url' in result && result.url) {
         setPreview({ status: 'running', url: result.url, port: result.port! })
       } else {
-        setPreview({ status: 'error', message: result.error ?? 'Failed to start dev server' })
+        setPreview({ status: 'error', message: ('error' in result ? result.error : undefined) ?? 'Failed to start dev server' })
       }
     } catch (err) {
       setPreview({ status: 'error', message: String(err) })
+    } finally {
+      setProgress(null)
     }
   }, [activeProject])
 
@@ -104,12 +158,16 @@ export function PreviewPanel() {
             boxShadow: preview.status === 'running' ? '0 0 6px #22c55e' : 'none',
             transition: 'all 0.3s'
           }} />
-          {/* URL bar */}
-          <div style={styles.urlBar}>
+          {/* Branded address bar — shows the app identity, not a raw localhost URL */}
+          <div style={styles.urlBar} title={preview.status === 'running' ? preview.url : undefined}>
             {preview.status === 'running'
-              ? <span style={{ color: 'rgba(167,139,250,0.7)', fontFamily: 'monospace', fontSize: 11 }}>{preview.url}</span>
+              ? <span style={{ color: 'rgba(167,139,250,0.85)', fontFamily: 'monospace', fontSize: 11, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ opacity: 0.45 }}>platphorm ›</span>
+                  <span>{activeProject.name ?? activeProject.rootPath.split('/').pop()}</span>
+                  <span style={{ opacity: 0.35, fontSize: 10 }}>• live</span>
+                </span>
               : preview.status === 'starting'
-                ? <span style={{ color: 'rgba(245,158,11,0.7)', fontSize: 11, fontStyle: 'italic' }}>Starting dev server...</span>
+                ? <span style={{ color: 'rgba(245,158,11,0.7)', fontSize: 11, fontStyle: 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{progress?.stage ?? 'Starting dev server...'}</span>
                 : preview.status === 'error'
                   ? <span style={{ color: 'rgba(239,68,68,0.7)', fontSize: 11 }}>Error — see details below</span>
                   : <span style={{ color: 'rgba(255,255,255,0.2)', fontSize: 11 }}>Server not running</span>
@@ -120,7 +178,10 @@ export function PreviewPanel() {
         <div style={styles.toolbarRight}>
           {preview.status === 'running' && (
             <>
-              <ToolBtn onClick={openExternal} title="Open in browser">
+              <ToolBtn onClick={refresh} title="Reload preview">
+                <RefreshIcon />
+              </ToolBtn>
+              <ToolBtn onClick={openExternal} title="Open in external browser">
                 <ExternalIcon />
               </ToolBtn>
               <ToolBtn onClick={stopPreview} title="Stop server" danger>
@@ -143,26 +204,47 @@ export function PreviewPanel() {
       {/* Content area */}
       <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
         {preview.status === 'running' && (
-          // Electron blocks cross-origin iframes (file:// → localhost:PORT).
-          // Show the URL with a prominent "Open in Browser" button instead —
-          // the system browser has no such restriction.
-          <div style={styles.placeholder}>
-            <div style={{ fontSize: 40, marginBottom: 8 }}>🚀</div>
-            <div style={styles.placeholderTitle}>Dev server running</div>
-            <div style={{ fontFamily: 'monospace', fontSize: 13, color: 'rgba(167,139,250,0.8)', background: 'rgba(124,58,237,0.08)', border: '1px solid rgba(124,58,237,0.2)', padding: '6px 14px', borderRadius: 8, marginTop: 4 }}>
-              {preview.url}
-            </div>
-            <div style={{ ...styles.placeholderDesc, marginTop: 6 }}>
-              Click below to open in your browser — hot reload works there too.
-            </div>
-            <button
-              onClick={() => window.api.shell.openExternal(preview.url).catch(() => {})}
-              style={{ ...styles.startBtnLarge, marginTop: 16 }}
-            >
-              <ExternalIcon />
-              Open in Browser
-            </button>
-          </div>
+          <>
+            {/* Embedded browser: <webview> runs the user's site in its own process
+                with zero cross-origin restrictions — the page renders right here,
+                with hot reload, exactly like an in-app browser tab. */}
+            <webview
+              key={refreshKey}
+              ref={webviewRef}
+              src={preview.url}
+              allowpopups="true"
+              style={{
+                display: 'inline-flex',
+                width: '100%',
+                height: '100%',
+                border: 'none',
+                background: '#ffffff'
+              }}
+            />
+            {/* Runtime-error banner — turns invisible white-screen crashes into
+                copyable error text the user can paste straight to the AI. */}
+            {consoleErrors.length > 0 && (
+              <div style={styles.errorBanner}>
+                <div style={styles.errorBannerHeader}>
+                  <span style={{ fontWeight: 700 }}>⚠ {consoleErrors.length} runtime error{consoleErrors.length > 1 ? 's' : ''} in the page</span>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button
+                      style={styles.errorBannerBtn}
+                      onClick={() => navigator.clipboard.writeText(
+                        `The preview shows a white screen. Console errors:\n${consoleErrors.join('\n')}\nFix these errors and verify.`
+                      ).catch(() => {})}
+                    >Copy for AI</button>
+                    <button style={styles.errorBannerBtn} onClick={() => setConsoleErrors([])}>Dismiss</button>
+                  </div>
+                </div>
+                <div style={styles.errorBannerBody}>
+                  {consoleErrors.map((err, i) => (
+                    <div key={i} style={{ padding: '2px 0', borderBottom: i < consoleErrors.length - 1 ? '1px solid rgba(239,68,68,0.15)' : 'none' }}>{err}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {preview.status === 'idle' && (
@@ -185,10 +267,12 @@ export function PreviewPanel() {
             <div style={{ ...styles.placeholderIcon, animation: 'spin 1.2s linear infinite' }}>
               <RefreshIcon />
             </div>
-            <div style={styles.placeholderTitle}>Starting dev server...</div>
+            <div style={styles.placeholderTitle}>{progress?.stage ?? 'Starting dev server...'}</div>
             <div style={styles.placeholderDesc}>
-              Running <code style={{ fontFamily: 'monospace', color: 'rgba(167,139,250,0.7)' }}>{detectScript(activeProject.rootPath)}</code>
-              <br />This usually takes 5–15 seconds.
+              {progress?.detail
+                ? <code style={{ fontFamily: 'monospace', fontSize: 11, color: 'rgba(167,139,250,0.7)', wordBreak: 'break-all' }}>{progress.detail}</code>
+                : <>First run installs dependencies automatically — that can take a few minutes.<br />After that, startup takes 5–15 seconds.</>
+              }
             </div>
           </div>
         )}
@@ -351,5 +435,25 @@ const styles = {
   },
   placeholderDesc: {
     fontSize: 12, color: 'rgba(255,255,255,0.25)', lineHeight: 1.65, maxWidth: 300
+  },
+  errorBanner: {
+    position: 'absolute' as const, left: 8, right: 8, bottom: 8,
+    background: 'rgba(20,8,10,0.97)', border: '1px solid rgba(239,68,68,0.4)',
+    borderRadius: 10, overflow: 'hidden', zIndex: 5,
+    boxShadow: '0 4px 24px rgba(0,0,0,0.5)'
+  },
+  errorBannerHeader: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    padding: '7px 12px', fontSize: 11, color: '#f87171',
+    background: 'rgba(239,68,68,0.08)', borderBottom: '1px solid rgba(239,68,68,0.2)'
+  },
+  errorBannerBtn: {
+    padding: '3px 10px', borderRadius: 6, border: '1px solid rgba(239,68,68,0.35)',
+    background: 'transparent', color: '#f87171', fontSize: 10, fontWeight: 600,
+    cursor: 'pointer', fontFamily: 'inherit'
+  },
+  errorBannerBody: {
+    padding: '8px 12px', maxHeight: 120, overflowY: 'auto' as const,
+    fontFamily: 'monospace', fontSize: 10.5, lineHeight: 1.5, color: 'rgba(252,165,165,0.9)'
   }
 }

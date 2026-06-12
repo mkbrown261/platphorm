@@ -33,7 +33,14 @@ const api = {
     stop:   (projectPath: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('preview:stop', projectPath),
     status: (projectPath: string): Promise<{ running: boolean; port?: number; url?: string }> =>
-      ipcRenderer.invoke('preview:status', projectPath)
+      ipcRenderer.invoke('preview:status', projectPath),
+    // Subscribe to startup progress events (scanning / installing / starting…).
+    // Returns an unsubscribe function.
+    onProgress: (cb: (p: { stage: string; detail?: string }) => void): (() => void) => {
+      const listener = (_e: unknown, p: { stage: string; detail?: string }) => cb(p)
+      ipcRenderer.on('preview:progress', listener)
+      return () => ipcRenderer.removeListener('preview:progress', listener)
+    }
   },
   // Shell utilities — electronAPI from @electron-toolkit/preload doesn't expose shell,
   // so we route safe operations through IPC instead.
@@ -43,7 +50,7 @@ const api = {
     runCommand: (
       cwd: string,
       command: string
-    ): Promise<{ success: boolean; output?: string; error?: string }> =>
+    ): Promise<{ success: boolean; output?: string; error?: string; exitCode?: number }> =>
       ipcRenderer.invoke('shell:runCommand', cwd, command)
   }
 }

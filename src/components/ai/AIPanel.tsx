@@ -4,7 +4,7 @@ import { useAIStore } from '../../store/aiStore'
 import { useDNAStore } from '../../store/dnaStore'
 import { useProjectStore } from '../../store/projectStore'
 import { runPipeline } from '../../core/intelligence/Pipeline'
-import { runAgent, buildAgentSystemPrompt } from '../../core/intelligence/AgentRunner'
+import { runAgent, buildAgentSystemPrompt, compressHistory } from '../../core/intelligence/AgentRunner'
 import { orchestrator } from '../../core/providers/AIOrchestrator'
 import type { PipelineContext, LayerResult } from '../../types'
 
@@ -375,25 +375,17 @@ function LawsConfirmDialog({ onDecide }: { onDecide: (result: 'yes' | 'no' | 'ne
 function cleanStreamText(text: string): string {
   // Strip ALL variants of XML tool-call markup that Claude (via OpenRouter or direct)
   // leaks into the content stream when it falls back to its native XML tool format.
-  // This covers: <function_calls>, <function_calls>, <invoke>, <invoke>,
-  // <parameter>, <parameter> — both complete blocks and partial/broken tags
-  // that appear during streaming before the closing tag has arrived.
+  // (?:antml:)? matches both the plain and namespace-prefixed tag variants — the
+  // previous version had literally identical regex alternatives and mismatched
+  // open/close tag pairs, so namespaced markup leaked straight into the UI.
   return text
     // Complete blocks first (greedy strip)
-    .replace(/<function_calls>[\s\S]*?<\/antml:function_calls>/g, '')
-    .replace(/<function_calls>[\s\S]*?<\/function_calls>/g, '')
-    .replace(/<invoke[\s\S]*?<\/antml:invoke>/g, '')
-    .replace(/<invoke[\s\S]*?<\/invoke>/g, '')
-    // Partial/open tags that haven't closed yet (mid-stream)
-    .replace(/<function_calls>[\s\S]*/g, '')
-    .replace(/<function_calls>[\s\S]*/g, '')
-    // Individual tags
-    .replace(/<\/?antml:function_calls[^>]*>/g, '')
-    .replace(/<\/?antml:invoke[^>]*>/g, '')
-    .replace(/<\/?antml:parameter[^>]*>/g, '')
-    .replace(/<\/?function_calls[^>]*>/g, '')
-    .replace(/<\/?invoke[^>]*>/g, '')
-    .replace(/<\/?parameter[^>]*>/g, '')
+    .replace(/<(?:antml:)?function_calls>[\s\S]*?<\/(?:antml:)?function_calls>/g, '')
+    .replace(/<(?:antml:)?invoke[\s\S]*?<\/(?:antml:)?invoke>/g, '')
+    // Partial/open blocks that haven't closed yet (mid-stream)
+    .replace(/<(?:antml:)?function_calls>[\s\S]*/g, '')
+    // Individual leftover tags
+    .replace(/<\/?(?:antml:)?(?:function_calls|invoke|parameter)[^>]*>/g, '')
     // Bare "antml:" prefix fragments that appear as broken tokens
     .replace(/antml:[a-z_]+/g, '')
     .trim()
@@ -551,6 +543,8 @@ export function AIPanel() {
 
   // Conversation history for multi-turn memory (what gets sent back to the model)
   const historyRef = useRef<ChatCompletionMessageParam[]>([])
+  // Abort controller for the in-flight agent run — lets the user stop mid-loop
+  const abortRef = useRef<AbortController | null>(null)
 
   const bottomRef = useRef<HTMLDivElement>(null)
   const taRef     = useRef<HTMLTextAreaElement>(null)
@@ -690,7 +684,7 @@ export function AIPanel() {
 
     activeProject && governanceOn ? await withPipeline(text) : await withAgent(text)
     setBusy(false)
-  }, [input, busy, activeProject, dna, activeTab, settings, governanceOn, lawsConfirmDisabled, askLawsConfirm])
+  }, [input, busy, activeProject, dna, activeTab, settings, governanceOn, lawsConfirmDisabled, askLawsConfirm, fileTree])
 
   // ── Agent mode (no project open) ─────────────────────────────────────────
 
@@ -703,14 +697,23 @@ export function AIPanel() {
       systemName: dna?.identity?.systemName,
       corePurpose: dna?.identity?.corePurpose,
       systemLaws: dna?.systemLaws?.map((l: any) => l.rule) ?? [],
-      forbiddenPatterns: dna?.forbiddenPatterns ?? []
+      forbiddenPatterns: dna?.forbiddenPatterns ?? [],
+      // Structural memory — decisions, work completed, rejections, preferences.
+      // (compressHistory existed but was never wired in; raw transcripts alone
+      // lose the signal of what was decided and rejected.)
+      conversationSummary: historyRef.current.length > 0
+        ? compressHistory(historyRef.current)
+        : undefined
     })
 
     const fullPrompt = buildPromptWithContext(prompt, activeTab, activeProject, fileTree)
     let assistantText = ''
+    const toolSummaries: string[] = []
+
+    abortRef.current = new AbortController()
 
     try {
-      for await (const event of runAgent(fullPrompt, sys, historyRef.current, undefined, activeProject?.rootPath)) {
+      for await (const event of runAgent(fullPrompt, sys, historyRef.current, undefined, activeProject?.rootPath, abortRef.current.signal)) {
         if (event.type === 'thinking_start') {
           // ThinkingOrb shows automatically via empty activity + busy
         } else if (event.type === 'stream_token') {
@@ -722,6 +725,7 @@ export function AIPanel() {
           pushActivity(msgId, { kind: 'tool', id: event.id, icon: event.icon, label: event.label, detail: event.detail, status: 'running' })
         } else if (event.type === 'tool_done') {
           patchTool(msgId, event.id, event.success ? 'done' : 'error', event.summary)
+          toolSummaries.push(`${event.success ? '✓' : '✗'} ${event.summary}`)
         } else if (event.type === 'cutoff') {
           pushActivity(msgId, { kind: 'cutoff', loops: event.loops })
         } else if (event.type === 'error') {
@@ -732,16 +736,25 @@ export function AIPanel() {
     } catch (err) {
       finalizeStream(msgId)
       setMsgs(p => p.map(m => m.id === msgId ? { ...m, content: `Error: ${String(err)}` } : m))
+    } finally {
+      abortRef.current = null
     }
 
     // Append to conversation history for next turn.
-    // cleanStreamText strips any residual Anthropic XML markup from the assistant
-    // turn before it re-enters the context window — XML in history confuses models.
-    if (assistantText) {
+    // • Store the RAW user prompt — not the enriched one. The enriched prompt
+    //   embeds a file-tree + up-to-6KB file snapshot that goes stale immediately
+    //   and balloons the context window every turn.
+    // • Append a compact tool-activity trail to the assistant turn so the model
+    //   remembers which files it actually created/edited last turn.
+    // • cleanStreamText strips residual XML markup before it re-enters context.
+    if (assistantText || toolSummaries.length) {
+      const toolTrail = toolSummaries.length
+        ? `\n\n[Actions taken: ${toolSummaries.slice(0, 12).join(' · ')}]`
+        : ''
       historyRef.current = [
         ...historyRef.current,
-        { role: 'user', content: fullPrompt },
-        { role: 'assistant', content: cleanStreamText(assistantText) }
+        { role: 'user', content: prompt },
+        { role: 'assistant', content: (cleanStreamText(assistantText) || '(worked silently)') + toolTrail }
       ]
       if (historyRef.current.length > 20) {
         historyRef.current = historyRef.current.slice(-20)
@@ -799,12 +812,9 @@ export function AIPanel() {
           return
         }
 
-        // Build a conversation summary for agent context
+        // Structural memory — decisions, work completed, rejections, preferences
         const conversationSummary = historyRef.current.length > 0
-          ? historyRef.current
-              .filter(m => m.role === 'user')
-              .map(m => `User: ${String(m.content).slice(0, 200)}`)
-              .join('\n')
+          ? compressHistory(historyRef.current)
           : undefined
 
         const sys = buildAgentSystemPrompt({
@@ -817,32 +827,43 @@ export function AIPanel() {
         })
 
         let assistantText = ''
+        const toolSummaries: string[] = []
+
+        abortRef.current = new AbortController()
 
         const enrichedPrompt = buildPromptWithContext(prompt, activeTab, activeProject, fileTree)
-        for await (const event of runAgent(enrichedPrompt, sys, historyRef.current, undefined, activeProject!.rootPath)) {
-          if (event.type === 'stream_token') {
-            assistantText += event.token
-            appendStreamToken(msgId, event.token)
-          } else if (event.type === 'thinking_done') {
-            finalizeStream(msgId)
-          } else if (event.type === 'tool_start') {
-            pushActivity(msgId, { kind: 'tool', id: event.id, icon: event.icon, label: event.label, detail: event.detail, status: 'running' })
-          } else if (event.type === 'tool_done') {
-            patchTool(msgId, event.id, event.success ? 'done' : 'error', event.summary)
-          } else if (event.type === 'cutoff') {
-            pushActivity(msgId, { kind: 'cutoff', loops: event.loops })
-          } else if (event.type === 'error') {
-            finalizeStream(msgId)
-            pushActivity(msgId, { kind: 'stream', text: `Agent error: ${event.message}`, done: true })
+        try {
+          for await (const event of runAgent(enrichedPrompt, sys, historyRef.current, undefined, activeProject!.rootPath, abortRef.current.signal)) {
+            if (event.type === 'stream_token') {
+              assistantText += event.token
+              appendStreamToken(msgId, event.token)
+            } else if (event.type === 'thinking_done') {
+              finalizeStream(msgId)
+            } else if (event.type === 'tool_start') {
+              pushActivity(msgId, { kind: 'tool', id: event.id, icon: event.icon, label: event.label, detail: event.detail, status: 'running' })
+            } else if (event.type === 'tool_done') {
+              patchTool(msgId, event.id, event.success ? 'done' : 'error', event.summary)
+              toolSummaries.push(`${event.success ? '✓' : '✗'} ${event.summary}`)
+            } else if (event.type === 'cutoff') {
+              pushActivity(msgId, { kind: 'cutoff', loops: event.loops })
+            } else if (event.type === 'error') {
+              finalizeStream(msgId)
+              pushActivity(msgId, { kind: 'stream', text: `Agent error: ${event.message}`, done: true })
+            }
           }
+        } finally {
+          abortRef.current = null
         }
 
-        // Thread into history — strip any XML bleed before saving
-        if (assistantText) {
+        // Thread into history — raw prompt + assistant text + compact tool trail
+        if (assistantText || toolSummaries.length) {
+          const toolTrail = toolSummaries.length
+            ? `\n\n[Actions taken: ${toolSummaries.slice(0, 12).join(' · ')}]`
+            : ''
           historyRef.current = [
             ...historyRef.current,
             { role: 'user', content: prompt },
-            { role: 'assistant', content: cleanStreamText(assistantText) }
+            { role: 'assistant', content: (cleanStreamText(assistantText) || '(worked silently)') + toolTrail }
           ]
           if (historyRef.current.length > 20) historyRef.current = historyRef.current.slice(-20)
         }
@@ -1140,19 +1161,25 @@ export function AIPanel() {
           <div style={{ position: 'absolute', bottom: 8, left: 12, right: 8, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <span style={{ fontSize: 10, color: 'rgba(255,255,255,0.1)', fontFamily: 'monospace' }}>⌘↵ send</span>
             <button
-              onClick={send}
-              disabled={!input.trim() || busy || !!confirmPending}
+              onClick={() => {
+                if (busy) { abortRef.current?.abort(); return }
+                send()
+              }}
+              disabled={(!busy && !input.trim()) || !!confirmPending}
+              title={busy ? 'Stop the agent' : 'Send'}
               style={{
                 width: 28, height: 28, borderRadius: 8, border: 'none', flexShrink: 0,
-                background: input.trim() && !busy && !confirmPending ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'rgba(255,255,255,0.06)',
-                cursor: input.trim() && !busy && !confirmPending ? 'pointer' : 'not-allowed',
+                background: busy
+                  ? 'rgba(239,68,68,0.18)'
+                  : input.trim() && !confirmPending ? 'linear-gradient(135deg, #7c3aed, #4f46e5)' : 'rgba(255,255,255,0.06)',
+                cursor: busy || (input.trim() && !confirmPending) ? 'pointer' : 'not-allowed',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 boxShadow: input.trim() && !busy && !confirmPending ? '0 0 14px rgba(124,58,237,0.4)' : 'none',
                 transition: 'all 0.2s'
               }}
             >
               {busy
-                ? <div style={{ width: 12, height: 12, border: '2px solid rgba(255,255,255,0.25)', borderTopColor: 'white', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
+                ? <div style={{ width: 9, height: 9, borderRadius: 2, background: '#f87171' }} />
                 : <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2.5" strokeLinecap="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               }
             </button>

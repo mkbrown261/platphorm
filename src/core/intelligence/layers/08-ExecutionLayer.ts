@@ -1,6 +1,6 @@
 import type { ExecutionPlan, FileChange, Finding, LayerResult, PipelineContext } from '../../../types'
 import { orchestrator } from '../../providers/AIOrchestrator'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runExecutionLayer(
   context: PipelineContext,
@@ -28,9 +28,15 @@ export async function runExecutionLayer(
     }
   }
 
+  // PLAN-ONLY: this layer previously asked the model to generate FULL FILE
+  // CONTENTS inside a JSON field ("after"). That output was thrown away — the
+  // agent does the real file work after governance approval — so it burned a
+  // large, slow LLM call producing code nobody used, and large files routinely
+  // truncated the JSON. The plan is what governance needs: which files, what
+  // kind of change, why, and how risky.
   const prompt = `You are the Execution Layer of the PLATPHORM engineering OS.
 
-All previous governance layers have passed. Now produce a safe execution plan.
+All previous governance layers have passed. Produce a safe execution PLAN — do NOT generate file contents. Describe the changes; the agent implements them after approval.
 
 Developer request: "${context.userPrompt}"
 ${context.selectedCode ? `\nContext code:\n\`\`\`\n${context.selectedCode}\n\`\`\`` : ''}
@@ -38,7 +44,7 @@ ${context.activeFile ? `\nActive file: ${context.activeFile}` : ''}
 ${context.architectureDoc ? `\nArchitecture:\n${context.architectureDoc.slice(0, 2000)}` : ''}
 
 Produce:
-1. Exact list of file changes (create/modify/delete)
+1. Exact list of file changes (create/modify/delete) — path, type, and reason only
 2. Risk assessment (low/medium/high/critical)
 3. Whether changes are reversible
 4. Rollback plan
@@ -50,8 +56,7 @@ Respond in JSON:
     {
       "path": "src/...",
       "type": "create|modify|delete|rename",
-      "reason": "...",
-      "after": "... full file content or diff ..."
+      "reason": "one sentence describing the intended change"
     }
   ],
   "estimatedRisk": "low|medium|high|critical",
@@ -63,7 +68,7 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'backend' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
 
     const executionPlan: ExecutionPlan = {
       changes: (parsed.changes ?? []) as FileChange[],
@@ -76,9 +81,9 @@ Respond in JSON:
 
     return {
       layer: 'execution',
-      status: 'passed',
-      score: 100,
-      findings: [],
+      status: ok ? 'passed' : 'warned',
+      score: ok ? 100 : 60,
+      findings: ok ? [] : [unparseableFinding('execution') as Finding],
       durationMs: Date.now() - start,
       timestamp: Date.now(),
       executionPlan

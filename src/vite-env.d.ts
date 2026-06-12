@@ -40,13 +40,14 @@ interface Window {
       start:  (projectPath: string) => Promise<{ success: boolean; port?: number; url?: string; error?: string }>
       stop:   (projectPath: string) => Promise<{ success: boolean }>
       status: (projectPath: string) => Promise<{ running: boolean; port?: number; url?: string }>
+      onProgress: (cb: (p: { stage: string; detail?: string }) => void) => (() => void)
     }
     // ── Shell utilities ──────────────────────────────────────────────────────
     // NOTE: electronAPI from @electron-toolkit/preload does NOT expose shell.
     // We use safe IPC-based routes for all shell operations.
     shell: {
       openExternal: (url: string) => Promise<{ success: boolean; error?: string }>
-      runCommand: (cwd: string, command: string) => Promise<{ success: boolean; output?: string; error?: string }>
+      runCommand: (cwd: string, command: string) => Promise<{ success: boolean; output?: string; error?: string; exitCode?: number }>
     }
   }
   electron: {

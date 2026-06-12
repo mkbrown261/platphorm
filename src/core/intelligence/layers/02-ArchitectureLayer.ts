@@ -1,6 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runArchitectureLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -67,7 +67,8 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'architect' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
+    if (!ok) findings.push(unparseableFinding('architecture') as Finding)
 
     for (const v of parsed.violations ?? []) {
       findings.push({
@@ -93,7 +94,7 @@ Respond in JSON:
     return {
       layer: 'architecture',
       status: hasBlocker ? 'failed' : findings.length > 0 ? 'warned' : 'passed',
-      score: parsed.score ?? 95,
+      score: clampScore(parsed.score, ok ? 95 : 60),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()

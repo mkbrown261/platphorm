@@ -1,6 +1,6 @@
 import { orchestrator } from '../../providers/AIOrchestrator'
 import type { Finding, LayerResult, PipelineContext } from '../../../types'
-import { extractJSON, safeParseJSON, clampScore } from '../utils'
+import { clampScore, parseLayerJSON, unparseableFinding } from '../utils'
 
 export async function runContinuityLayer(context: PipelineContext): Promise<LayerResult> {
   const start = Date.now()
@@ -64,8 +64,9 @@ Respond in JSON:
 
   try {
     const result = await orchestrator.orchestrate({ prompt, role: 'refactor' })
-    const parsed = safeParseJSON(result.result.content, {})
+    const { parsed, ok } = parseLayerJSON<any>(result.result.content)
     const findings: Finding[] = []
+    if (!ok) findings.push(unparseableFinding('continuity') as Finding)
 
     for (const f of parsed.findings ?? []) {
       findings.push({
@@ -82,8 +83,8 @@ Respond in JSON:
 
     return {
       layer: 'continuity',
-      status: parsed.driftDetected ? 'warned' : 'passed',
-      score: parsed.coherenceScore ?? 85,
+      status: parsed.driftDetected || !ok ? 'warned' : 'passed',
+      score: clampScore(parsed.coherenceScore, ok ? 85 : 60),
       findings,
       durationMs: Date.now() - start,
       timestamp: Date.now()
