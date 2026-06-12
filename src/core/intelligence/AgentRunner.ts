@@ -655,6 +655,8 @@ If you cannot write a clear ⟶ line, you don't know why you're calling the tool
 
 **run_command:** Install every package BEFORE writing code that imports it. TS2307 "cannot find module" always means the package (or its @types/*) isn't installed — install it, don't refactor around it. Use curl/wget for runtime assets; never hand-write binary files.
 
+**Config files reference only installed packages.** Every plugin/preset/module named in babel.config.js, metro.config.js, vite.config.ts, tailwind.config.js, etc. MUST exist in package.json — config files crash the whole dev server at boot when they reference a missing module ("Cannot find module 'x/plugin'"). After writing or editing any config: grep it for package names, cross-check each against package.json, and install what's missing. Only add plugins the project actually uses — don't copy boilerplate configs with plugins for libraries you didn't install.
+
 ━━━ CODE STANDARDS ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 1. **Complete files or surgical patches — nothing in between.** No placeholders, no TODO/FIXME in shipped code, no lorem ipsum. If you can't do something, say it in chat — never bury it in code.

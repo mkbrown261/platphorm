@@ -580,9 +580,10 @@ function registerIpcHandlers(): void {
         BROWSER: 'none',
         VITE_OPEN: 'false',
         NEXT_TELEMETRY_DISABLED: '1',
-        // Make CLIs answer their own prompts with defaults instead of dying
-        // with "Input is required ... in non-interactive mode" (Expo) or hanging.
-        CI: '1',
+        // NOTE: deliberately NOT CI=1 — Metro reads CI and disables file
+        // watching ("reloads are disabled"), which kills hot reload. Expo is
+        // already non-interactive because stdin is not a TTY; prompt-deaths
+        // are prevented by assigning a guaranteed-free port up front.
         EXPO_NO_TELEMETRY: '1'
       },
       shell: true,
